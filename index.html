@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#070b18">
+<meta name="description" content="奶娃战机 — 纯静态的网页弹幕射击小游戏，拖动即可游玩，支持手机与电脑。">
+<title>奶娃战机 · Naiwa Sky War</title>
+<link rel="icon" href="assets/avatar.png">
+<link rel="apple-touch-icon" href="assets/avatar.png">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<div id="app">
+  <!-- 游戏舞台：所有画面都限制在这一列里，手机 / 电脑都不会跑偏 -->
+  <div id="stage">
+    <canvas id="game" aria-label="游戏画面"></canvas>
+
+    <!-- ======================= 战斗 HUD ======================= -->
+    <div id="hud" class="hidden" aria-live="polite">
+      <div class="hud-row hud-top">
+        <div class="hp-wrap">
+          <img class="avatar" src="assets/avatar.png" alt="">
+          <div class="hp-col">
+            <div class="hp-bar"><div id="hpFill" class="hp-fill"></div><span id="hpText" class="hp-text">100 / 100</span></div>
+            <div class="buffs">
+              <span id="buffShield" class="buff hidden">🛡 护盾 <b id="shieldT">0.0</b>s</span>
+              <span id="buffWeapon" class="buff">🔥 火力 <b id="weaponLv">1</b> 级</span>
+            </div>
+          </div>
+        </div>
+        <div class="score-wrap">
+          <div class="score-label">分数</div>
+          <div id="scoreText" class="score-value">0</div>
+          <div id="comboText" class="combo">连击 x1.0</div>
+        </div>
+      </div>
+      <div class="hud-row hud-bottom">
+        <span class="stat">⏱ <b id="timeText">00:00</b></span>
+        <span class="stat">难度 <b id="levelText">1</b></span>
+        <span class="stat">歼灭 <b id="killText">0</b></span>
+        <div class="spacer"></div>
+        <button id="btnSound" class="icon-btn" type="button" title="音效开关" aria-label="音效开关">🔊</button>
+        <button id="btnPause" class="icon-btn" type="button" title="暂停" aria-label="暂停">⏸</button>
+      </div>
+    </div>
+
+    <!-- ======================= 主菜单 ======================= -->
+    <section id="screen-menu" class="screen">
+      <div class="panel menu-panel">
+        <h1 class="title">奶娃战机</h1>
+        <p class="subtitle">NAIWA SKY WAR</p>
+        <img class="menu-hero" src="assets/menu_hero.png" alt="奶娃">
+        <p class="tagline">拖动奶娃，躲开弹幕，一路轰过去！</p>
+        <button id="btnStart" class="btn btn-primary" type="button">开始游戏</button>
+        <div class="best-line">历史最高分 <b id="bestScoreMenu">0</b></div>
+        <button id="btnHelp" class="btn btn-ghost" type="button">玩法说明</button>
+      </div>
+    </section>
+
+    <!-- ======================= 玩法说明 ======================= -->
+    <section id="screen-help" class="screen hidden">
+      <div class="panel">
+        <h2>玩法说明</h2>
+        <ul class="help-list">
+          <li><b>拖动</b>屏幕上的任意位置即可操控奶娃（手机手指 / 电脑鼠标都行），不需要按开火键。</li>
+          <li>奶娃会<b>自动向前方持续射击</b>，你只要专心躲子弹、把敌人撞进准星里。</li>
+          <li>难度会随存活时间不断提升：敌人更多、更快、更耐打，每 60 秒还会来一个 Boss。</li>
+          <li>击落敌机、持续存活、拾取道具、连击和升级都会加分数。</li>
+        </ul>
+        <h3>道具</h3>
+        <div class="items-grid">
+          <div class="item-card"><img src="assets/item_heal.png" alt=""><div><b>奶蛋</b><span>恢复 25 点生命</span></div></div>
+          <div class="item-card"><img src="assets/item_power.png" alt=""><div><b>准备战斗</b><span>火力等级 +1（最高 5 级）</span></div></div>
+          <div class="item-card"><img src="assets/item_shield.png" alt=""><div><b>祈祷</b><span>获得 5 秒护盾，撞机也不怕</span></div></div>
+          <div class="item-card"><img src="assets/item_angel.png" alt=""><div><b>天使降临</b><span>清空弹幕并重创全场敌人</span></div></div>
+        </div>
+        <h3>敌人</h3>
+        <div class="items-grid">
+          <div class="item-card"><img src="assets/enemy_chicken.png" alt=""><div><b>奶鸡</b><span>基础敌机，会瞄准射击</span></div></div>
+          <div class="item-card"><img src="assets/enemy_rabbit.png" alt=""><div><b>奶兔</b><span>高速蛇形，撞上来很疼</span></div></div>
+          <div class="item-card"><img src="assets/enemy_dog.png" alt=""><div><b>奶狗</b><span>厚甲，会打三连散射</span></div></div>
+          <div class="item-card"><img src="assets/enemy_taunt.png" alt=""><div><b>吐舌娃</b><span>悬停压制，连发瞄准弹</span></div></div>
+        </div>
+        <button id="btnHelpBack" class="btn btn-primary" type="button">返回</button>
+      </div>
+    </section>
+
+    <!-- ======================= 暂停 ======================= -->
+    <section id="screen-pause" class="screen hidden">
+      <div class="panel">
+        <h2>已暂停</h2>
+        <div class="pause-stats">
+          <div><span>分数</span><b id="pauseScore">0</b></div>
+          <div><span>存活</span><b id="pauseTime">00:00</b></div>
+        </div>
+        <button id="btnResume" class="btn btn-primary" type="button">继续游戏</button>
+        <button id="btnRestartPause" class="btn btn-ghost" type="button">重新开始</button>
+        <button id="btnQuit" class="btn btn-ghost" type="button">返回主菜单</button>
+        <a class="btn btn-ghost btn-github" href="https://github.com/Thomas455/"
+           target="_blank" rel="noopener noreferrer">
+          <svg class="gh-icon" viewBox="0 0 16 16" width="17" height="17" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+          <span>访问作者 GitHub 主页</span>
+        </a>
+      </div>
+    </section>
+
+    <!-- ======================= 结算 ======================= -->
+    <section id="screen-over" class="screen hidden">
+      <div class="panel over-panel">
+        <h2 id="overTitle">战斗结束</h2>
+        <img id="overArt" class="over-art" src="assets/over_sad.png" alt="">
+        <div id="newRecord" class="new-record hidden">🎉 新纪录！</div>
+        <div class="result-score">
+          <span>本轮分数</span>
+          <b id="overScore">0</b>
+        </div>
+        <div class="result-grid">
+          <div><span>存活时长</span><b id="overTime">00:00</b></div>
+          <div><span>难度等级</span><b id="overLevel">1</b></div>
+          <div><span>歼灭敌机</span><b id="overKills">0</b></div>
+          <div><span>拾取道具</span><b id="overItems">0</b></div>
+          <div><span>最高连击</span><b id="overCombo">0</b></div>
+          <div><span>最终火力</span><b id="overWeapon">1</b></div>
+        </div>
+        <div class="best-line">历史最高分 <b id="bestScoreOver">0</b></div>
+        <button id="btnRestart" class="btn btn-primary" type="button">再来一局</button>
+        <button id="btnMenu" class="btn btn-ghost" type="button">返回主菜单</button>
+        <a class="btn btn-ghost btn-github" href="https://github.com/Thomas455/"
+           target="_blank" rel="noopener noreferrer">
+          <svg class="gh-icon" viewBox="0 0 16 16" width="17" height="17" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+          <span>访问作者 GitHub 主页</span>
+        </a>
+      </div>
+    </section>
+
+    <!-- ======================= 加载 ======================= -->
+    <section id="screen-loading" class="screen">
+      <div class="panel loading-panel">
+        <div class="loading-egg"></div>
+        <p>正在加载奶娃…</p>
+        <div class="loading-bar"><div id="loadFill"></div></div>
+      </div>
+    </section>
+  </div>
+
+  <p id="rotate-hint" class="rotate-hint">把手机竖起来玩效果更好哦～</p>
+</div>
+
+<script src="js/core.js"></script>
+<script src="js/assets.js"></script>
+<script src="js/audio.js"></script>
+<script src="js/render.js"></script>
+<script src="js/input.js"></script>
+<script src="js/ui.js"></script>
+<script src="js/main.js"></script>
+</body>
+</html>
