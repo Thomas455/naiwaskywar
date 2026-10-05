@@ -1,7 +1,7 @@
 # 奶娃战机 · Naiwa Sky War
 
 一个**纯静态**的网页竖版弹幕射击小游戏：拖动奶娃战机躲子弹、打敌机、捡道具、刷分数。
-手机和电脑都能玩，全部素材本地存放，直接丢到 GitHub Pages 就能跑。
+手机和电脑都能玩
 
 ## 玩法
 
@@ -44,18 +44,6 @@
 node ../tools/serve.js 8765
 # 打开 http://127.0.0.1:8765/
 ```
-
-## 部署到 GitHub Pages
-
-1. 把本仓库推到 GitHub。
-2. 仓库 **Settings → Pages → Build and deployment**：
-   - Source 选 `Deploy from a branch`
-   - Branch 选 `main`，目录选 **`/docs`**
-3. 保存后等一分钟，访问 `https://<你的用户名>.github.io/<仓库名>/`。
-
-整站没有构建步骤、没有外部 CDN、没有后端，`docs/` 目录本身就是完整产物。
-（`docs/.nojekyll` 用来避免 Jekyll 处理，路径大小写敏感问题也随之规避。）
-
 ## 目录结构
 
 ```
