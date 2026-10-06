@@ -1,5 +1,7 @@
 # 奶娃战机 · Naiwa Sky War
 
+[点击游玩](https://thomas455.github.io/naiwaskywar/)
+
 一个**纯静态**的网页竖版弹幕射击小游戏：拖动奶娃战机躲子弹、打敌机、捡道具、刷分数。
 手机和电脑都能玩
 
