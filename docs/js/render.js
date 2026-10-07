@@ -69,7 +69,7 @@
     bg.fill();
     this.sprBullet = b;
 
-    // 敌弹：橙红能量球
+    // 敌方子弹：橙红能量球
     var e = makeCanvas(28, 28);
     var eg = e.getContext('2d');
     var rg = eg.createRadialGradient(14, 14, 1, 14, 14, 14);
@@ -80,6 +80,18 @@
     eg.fillStyle = rg;
     eg.fillRect(0, 0, 28, 28);
     this.sprEBullet = e;
+
+    // 火力满级散射弹：红色能量弹
+    var nv = makeCanvas(26, 26);
+    var ng = nv.getContext('2d');
+    var ngr = ng.createRadialGradient(13, 13, 1, 13, 13, 13);
+    ngr.addColorStop(0, '#fff0f0');
+    ngr.addColorStop(0.3, '#ff9a7a');
+    ngr.addColorStop(0.62, '#ff4d4d');
+    ngr.addColorStop(1, 'rgba(255,40,40,0)');
+    ng.fillStyle = ngr;
+    ng.fillRect(0, 0, 26, 26);
+    this.sprNovaBullet = nv;
 
     // Boss 弹：更大更红
     var eb = makeCanvas(34, 34);
@@ -154,6 +166,7 @@
     this._drawEnemyBullets(ctx, model);
     this._drawPlayerBullets(ctx, model);
     this._drawPlayer(ctx, model);
+    this._drawShockwaves(ctx, model);
     this._drawParticles(ctx, model);
     this._drawFloaters(ctx, model);
     this._drawVignette(ctx);
@@ -209,9 +222,120 @@
   };
 
   Renderer.prototype._drawPlayer = function (ctx, model) {
-    var p = model.player;
+    var list = model.players || [model.player];
+    var me = model.localSlot || 0;
+    // 先画别人，最后画自己 —— 人挤在一起时自己的战机永远在最上层，不会被挡住
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].slot !== me) this._drawOnePlayer(ctx, model, list[i]);
+    }
+    for (var j = 0; j < list.length; j++) {
+      if (list[j].slot === me) this._drawOnePlayer(ctx, model, list[j]);
+    }
+  };
+
+  // 每位玩家的配色（P1~P4）
+  var SLOT_COLORS = [
+    { main: '#6fe3ff', glow: '120,230,255' },
+    { main: '#ffd166', glow: '255,208,110' },
+    { main: '#9dff9d', glow: '150,255,150' },
+    { main: '#ff9ad5', glow: '255,150,215' }
+  ];
+
+  // 复活倒计时文案：120 秒这种长 CD 显示成 m:ss 更好读
+  function fmtCountdown(sec) {
+    sec = Math.max(0, Math.ceil(sec));
+    if (sec < 60) return sec + 's';
+    var m = Math.floor(sec / 60), s = sec % 60;
+    return m + ':' + (s < 10 ? '0' : '') + s;
+  }
+
+  Renderer.prototype._drawOnePlayer = function (ctx, model, p) {
+    var mine = (p.slot === (model.localSlot || 0));
+    var multi = (model.players && model.players.length > 1);
+    var col = SLOT_COLORS[p.slot % SLOT_COLORS.length];
+    var spectating = (typeof model.spectateTarget === 'function') ? model.spectateTarget() : null;
+    var isSpectated = !!(spectating && spectating.slot === p.slot);
+
+    // 阵亡：画一个等待复活的标记
+    if (!p.alive) {
+      if (multi) {
+        ctx.save();
+        ctx.globalAlpha = 0.55 + 0.3 * Math.sin(this.time * 5);
+        ctx.strokeStyle = mine ? '#ff9a9a' : col.main;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 22, 0, TAU);
+        ctx.stroke();
+        ctx.fillStyle = mine ? '#ff9a9a' : col.main;
+        ctx.font = '700 13px system-ui, "PingFang SC", "Microsoft YaHei", sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('P' + (p.slot + 1) + ' ' + fmtCountdown(p.downT), p.x, p.y);
+        if (mine) {
+          ctx.globalAlpha = 0.9;
+          ctx.font = '700 10px system-ui, "PingFang SC", "Microsoft YaHei", sans-serif';
+          ctx.fillText('已阵亡', p.x, p.y + 18);
+        }
+        ctx.restore();
+      }
+      return;
+    }
+
     var img = this.assets.get('ship');
     var w = 94;
+
+    // 观战目标：画一圈亮金色转动的虚线环，让倒下的人一眼知道自己在看谁
+    if (isSpectated) {
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.globalAlpha = 0.30 + 0.20 * Math.sin(this.time * 4);
+      ctx.drawImage(this.sprGlowGold, p.x - 72, p.y - 72, 144, 144);
+      ctx.restore();
+      ctx.save();
+      ctx.strokeStyle = 'rgba(255,236,160,0.98)';
+      ctx.lineWidth = 3.4;
+      ctx.setLineDash([11, 8]);
+      ctx.lineDashOffset = this.time * 36;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 58, 0, TAU);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      var tag = '观战中';
+      ctx.font = '800 12px system-ui, "PingFang SC", "Microsoft YaHei", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      var tw = ctx.measureText(tag).width + 16;
+      ctx.fillStyle = 'rgba(28,20,0,0.85)';
+      ctx.beginPath();
+      if (ctx.roundRect) ctx.roundRect(p.x - tw / 2, p.y - 88, tw, 20, 10);
+      else ctx.rect(p.x - tw / 2, p.y - 88, tw, 20);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(255,236,160,0.9)';
+      ctx.lineWidth = 1.4;
+      ctx.stroke();
+      ctx.fillStyle = '#ffec9f';
+      ctx.fillText(tag, p.x, p.y - 78);
+      ctx.restore();
+    }
+
+    // 自己的战机：脚下加一圈高亮光环，人多了也能一眼认出自己
+    if (mine && multi) {
+      var pulse = 0.6 + 0.4 * Math.sin(this.time * 5);
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.globalAlpha = 0.30 + 0.22 * pulse;
+      ctx.drawImage(this.sprGlowWhite, p.x - 74, p.y - 74, 148, 148);
+      ctx.restore();
+      ctx.save();
+      ctx.strokeStyle = 'rgba(' + col.glow + ',' + (0.55 + 0.35 * pulse).toFixed(3) + ')';
+      ctx.lineWidth = 3;
+      ctx.setLineDash([9, 7]);
+      ctx.lineDashOffset = -this.time * 26;
+      ctx.beginPath();
+      ctx.ellipse(p.x, p.y + 26, 46, 16, 0, 0, TAU);
+      ctx.stroke();
+      ctx.restore();
+    }
 
     // 尾焰
     var flick = 0.75 + Math.random() * 0.5;
@@ -247,21 +371,31 @@
     this._drawSprite(ctx, img, p.x, p.y, w);
     ctx.restore();
 
-    // 护盾
-    if (p.shield > 0) {
-      var pulse = 0.72 + 0.28 * Math.sin(this.time * 7);
-      var rr = 52 + Math.sin(this.time * 5) * 2;
+    // 护盾：每层免伤画一圈，层数越多圈越亮
+    if (p.shieldCharges > 0) {
+      var sp2 = 0.72 + 0.28 * Math.sin(this.time * 6);
+      var rr = 50 + Math.sin(this.time * 5) * 2;
       ctx.save();
       ctx.globalCompositeOperation = 'lighter';
-      ctx.globalAlpha = 0.30 * pulse;
+      ctx.globalAlpha = 0.16 * p.shieldCharges * sp2;
       ctx.drawImage(this.sprGlowCyan, p.x - rr, p.y - rr, rr * 2, rr * 2);
       ctx.restore();
+      for (var c = 0; c < p.shieldCharges; c++) {
+        ctx.save();
+        ctx.strokeStyle = 'rgba(150,235,255,' + (0.70 * sp2).toFixed(3) + ')';
+        ctx.lineWidth = 2.6;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, rr * 0.82 - c * 6, 0, TAU);
+        ctx.stroke();
+        ctx.restore();
+      }
+      // 层数角标
       ctx.save();
-      ctx.strokeStyle = 'rgba(150,235,255,' + (0.65 * pulse).toFixed(3) + ')';
-      ctx.lineWidth = 2.4;
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, rr * 0.86, 0, TAU);
-      ctx.stroke();
+      ctx.fillStyle = '#dff6ff';
+      ctx.font = '700 12px system-ui, "PingFang SC", "Microsoft YaHei", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('🛡' + p.shieldCharges, p.x + 34, p.y - 30);
       ctx.restore();
     }
 
@@ -272,6 +406,40 @@
       ctx.globalAlpha = 0.18 + 0.12 * Math.sin(this.time * 8);
       ctx.drawImage(this.sprGlowRed, p.x - 60, p.y - 60, 120, 120);
       ctx.restore();
+    }
+
+    // P1~P4 标记（多人时才有意义）
+    if (multi) {
+      var label = 'P' + (p.slot + 1);
+      ctx.save();
+      ctx.font = '800 15px system-ui, "PingFang SC", "Microsoft YaHei", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      var lw = ctx.measureText(label).width + 16;
+      ctx.fillStyle = 'rgba(6,12,24,0.72)';
+      ctx.strokeStyle = col.main;
+      ctx.lineWidth = mine ? 2.4 : 1.4;
+      var by = p.y - 62;
+      ctx.beginPath();
+      if (ctx.roundRect) ctx.roundRect(p.x - lw / 2, by - 11, lw, 22, 11);
+      else ctx.rect(p.x - lw / 2, by - 11, lw, 22);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = col.main;
+      ctx.fillText(label, p.x, by);
+      if (mine) {
+        ctx.fillStyle = 'rgba(255,255,255,0.9)';
+        ctx.font = '700 10px system-ui, "PingFang SC", "Microsoft YaHei", sans-serif';
+        ctx.fillText('你', p.x, by - 20);
+      }
+      ctx.restore();
+
+      // 小血条
+      var bw = 46, bx = p.x - bw / 2, byy = p.y + 40;
+      ctx.fillStyle = 'rgba(0,0,0,0.45)';
+      ctx.fillRect(bx, byy, bw, 4);
+      ctx.fillStyle = col.main;
+      ctx.fillRect(bx, byy, bw * Math.max(0, p.hp / p.maxHp), 4);
     }
   };
 
@@ -353,11 +521,41 @@
     ctx.globalCompositeOperation = 'lighter';
     for (var i = 0; i < list.length; i++) {
       var b = list[i];
+      if (b.kind === 'nova') {
+        // 火力满级的红色散射弹
+        var d = b.r * 4.2;
+        ctx.drawImage(this.sprNovaBullet, b.x - d / 2, b.y - d / 2, d, d);
+        continue;
+      }
       ctx.save();
       ctx.translate(b.x, b.y);
       if (b.vx) ctx.rotate(Math.atan2(b.vy, b.vx) + Math.PI / 2);
       ctx.drawImage(this.sprBullet, -8, -15, 16, 30);
       ctx.restore();
+    }
+    ctx.restore();
+  };
+
+  /* 冲击波：护盾破裂 / 火力散射 / 复活 */
+  Renderer.prototype._drawShockwaves = function (ctx, model) {
+    var list = model.shockwaves;
+    if (!list || !list.length) return;
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    for (var i = 0; i < list.length; i++) {
+      var w = list[i];
+      var k = Math.max(0, w.life / w.max);
+      ctx.globalAlpha = k * 0.85;
+      ctx.strokeStyle = w.color;
+      ctx.lineWidth = w.width * k + 0.6;
+      ctx.beginPath();
+      ctx.arc(w.x, w.y, w.r, 0, TAU);
+      ctx.stroke();
+      // 内圈碎片感
+      ctx.globalAlpha = k * 0.35;
+      ctx.beginPath();
+      ctx.arc(w.x, w.y, w.r * 0.62, 0, TAU);
+      ctx.stroke();
     }
     ctx.restore();
   };

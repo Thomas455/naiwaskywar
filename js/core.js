@@ -32,12 +32,19 @@
 
     // 道具
     HEAL_AMOUNT: 25,
-    SHIELD_TIME: 5.0,
-    SHIELD_STACK: 2.5,       // 已有护盾时再吃一个只延长这么久，避免无限续盾
+    // 护盾：改成「一次免伤机会」，命中时消耗一层并触发护盾破裂
+    SHIELD_CHARGES_MAX: 3,     // 最多同时持有几层免伤
+    SHIELD_BREAK_INVUL: 0.9,   // 破裂后的短暂无敌（防止同一波弹幕瞬间吃光层数）
+    SHIELD_BREAK_RADIUS: 132,  // 破裂冲击波半径：会清掉这个范围内的敌弹
     ANGEL_INVUL: 3.0,
     ITEM_FALL: 78,
     DROP_CHANCE: { chicken: 0.16, rabbit: 0.15, dog: 0.30, taunt: 0.22, boss: 1.0 },
     ITEM_WEIGHTS: { heal: 42, power: 34, shield: 16, angel: 8 },
+
+    // 火力满级后，再吃「准备战斗」会立刻向四周打出红色散弹
+    POWER_NOVA_COUNT: 14,
+    POWER_NOVA_SPEED: 430,
+    POWER_NOVA_DMG: 2,
 
     // 计分
     SCORE: { chicken: 100, rabbit: 150, dog: 300, taunt: 220, boss: 5000 },
@@ -50,10 +57,23 @@
 
     // 难度曲线
     LEVEL_SECONDS: 20,       // 每 20 秒升一级
-    MAX_LEVEL: 20,
+    TIRE_LEVELS: 20,         // 前 20 级走原来那条曲线，之后继续往上加码
+    MAX_LEVEL: 100,          // 难度上限 100 级
     BOSS_EVERY: 60,          // 每 60 秒来一次 Boss
     SPAWN_MIN: 0.34,
     SPAWN_MAX: 1.15,
+
+    // 联机（最多 4 人；人越多越难）
+    MP: {
+      MAX_PLAYERS: 4,
+      ENEMY_HP_PER_PLAYER: 0.50,    // 每多一名玩家，敌机血量 +50%
+      SPAWN_PER_PLAYER: 0.30,       // 每多一名玩家，出怪更快
+      SPEED_PER_PLAYER: 0.10,       // 每多一名玩家，敌机更快
+      BOSS_HP_PER_PLAYER: 0.65,     // Boss 血量加成
+      RESPAWN_DELAY: 120,           // 阵亡后多久可以复活（秒）；这段时间里可以观战队友
+      RESPAWN_HP: 0.5,              // 复活时恢复多少比例的生命
+      JOIN_SCORE_BONUS: 0.15        // 每多一名玩家，得分略微提高
+    },
 
     // 敌机参数
     ENEMY: {
@@ -63,7 +83,7 @@
       taunt: { hp: 5, w: 62, h: 70, r: 26, speed: 108, score: 220, fire: 'burst', fireCd: 2.9, pattern: 'hover' },
       boss: { hp: 240, w: 196, h: 206, r: 76, speed: 62, score: 5000, fire: 'boss', fireCd: 1.5, pattern: 'boss' }
     },
-    EBULLET_SPEED: 205,
+    EBULLET_SPEED: 268,      // 敌弹基础速度（比原来快，弹幕更紧迫）
     EBULLET_R: 7
   };
 
@@ -94,9 +114,23 @@
   }
 
   /* ------------------------------------------------------- 难度曲线（要求 2） */
-  function difficultyAt(seconds) {
+  /* 分两段：
+   *   t      —— 1 ~ 20 级，走原来那条曲线（保证前 20 级手感和以前一致）
+   *   beyond —— 20 ~ 100 级，在原来的基础上继续加码（更多、更快、更硬）
+   * 第二个参数 playerCount 让「人越多越难」直接并进同一条曲线。
+   */
+  function difficultyAt(seconds, playerCount) {
     var lvl = clamp(1 + Math.floor(seconds / CONFIG.LEVEL_SECONDS), 1, CONFIG.MAX_LEVEL);
-    var t = (lvl - 1) / (CONFIG.MAX_LEVEL - 1);           // 0 → 1
+    var tier = Math.min(CONFIG.TIRE_LEVELS, CONFIG.MAX_LEVEL);
+    var t = tier > 1 ? clamp((lvl - 1) / (tier - 1), 0, 1) : 1;
+    var beyond = CONFIG.MAX_LEVEL > tier ? clamp((lvl - tier) / (CONFIG.MAX_LEVEL - tier), 0, 1) : 0;
+
+    var pc = clamp(Math.round(playerCount || 1), 1, CONFIG.MP.MAX_PLAYERS);
+    var mp = pc - 1;
+    var mpHp = 1 + CONFIG.MP.ENEMY_HP_PER_PLAYER * mp;
+    var mpSpawn = 1 / (1 + CONFIG.MP.SPAWN_PER_PLAYER * mp);
+    var mpSpeed = 1 + CONFIG.MP.SPEED_PER_PLAYER * mp;
+
     var pools = [];
     pools.push('chicken');
     if (lvl >= 2) pools.push('rabbit');
@@ -105,14 +139,21 @@
     return {
       level: lvl,
       t: t,
-      spawnInterval: lerp(CONFIG.SPAWN_MAX, CONFIG.SPAWN_MIN, t),
-      enemySpeed: lerp(1.0, 2.0, t),
-      enemyHp: lerp(1.0, 2.6, t),
-      bulletSpeed: lerp(0.85, 1.65, t),
-      enemyFireCd: lerp(1.15, 0.55, t),
-      formationSize: Math.round(lerp(2, 6, t)),
+      beyond: beyond,
+      players: pc,
+      spawnInterval: lerp(CONFIG.SPAWN_MAX, CONFIG.SPAWN_MIN, t) * lerp(1, 0.60, beyond) * mpSpawn,
+      enemySpeed: lerp(1.0, 2.0, t) * lerp(1, 1.5, beyond) * mpSpeed,
+      enemyHp: lerp(1.0, 2.6, t) * lerp(1, 2.0, beyond) * mpHp,
+      bulletSpeed: lerp(0.85, 1.65, t) * lerp(1, 1.22, beyond),
+      enemyFireCd: lerp(1.15, 0.55, t) * lerp(1, 0.70, beyond),
+      formationSize: Math.min(9, Math.round(lerp(2, 6, t) + 3 * beyond)),
       pool: pools
     };
+  }
+
+  // 伤害随难度增长：用 t / beyond 而不是线性等级，避免 100 级时一发秒杀
+  function damageScale(d) {
+    return 1 + 0.9 * (d.t || 0) + 0.6 * (d.beyond || 0);
   }
 
   /* -------------------------------------------------------------- 主模型 */
@@ -122,29 +163,46 @@
     this.height = opts.height || CONFIG.REF_H;
     this.seed = opts.seed === undefined ? (Date.now() & 0x7fffffff) : opts.seed;
     this.rng = new RNG(this.seed);
-    this.reset();
+    // 本地玩家占哪个席位（单人恒为 0；联机时由主机分配）
+    this.localSlot = opts.localSlot || 0;
+    this.reset(opts.players || 1);
   }
 
-  GameModel.prototype.reset = function () {
-    this.rng = new RNG(this.seed);
-    this.time = 0;
-    this.over = false;
-    this.paused = false;
-    this.diff = difficultyAt(0);
-
-    this.player = {
-      x: this.width / 2,
+  // 造一个玩家对象
+  GameModel.prototype._makePlayer = function (slot) {
+    return {
+      slot: slot,
+      x: this.width * (0.5 + (slot - 1.5) * 0.06),
       y: this.height * CONFIG.PLAYER_START_Y,
       tx: this.width / 2,
       ty: this.height * CONFIG.PLAYER_START_Y,
       hp: CONFIG.PLAYER_MAX_HP,
       maxHp: CONFIG.PLAYER_MAX_HP,
       weapon: 1,
-      shield: 0,
+      shieldCharges: 0,
       invul: 1.2,
       fireCd: 0,
-      alive: true
+      alive: true,
+      downT: 0,          // 阵亡后倒计时，归零则复活（联机）
+      kills: 0,
+      score: 0
     };
+  };
+
+  GameModel.prototype.reset = function (playerCount) {
+    this.rng = new RNG(this.seed);
+    this.time = 0;
+    this.over = false;
+    this.paused = false;
+    this.playerCount = clamp(Math.round(playerCount || this.playerCount || 1), 1, CONFIG.MP.MAX_PLAYERS);
+    this.diff = difficultyAt(0, this.playerCount);
+
+    this.players = [];
+    for (var s = 0; s < this.playerCount; s++) this.players.push(this._makePlayer(s));
+    for (var i = 0; i < this.players.length; i++) {
+      this.players[i].x = this.players[i].tx = this.width / 2 + (i - (this.players.length - 1) / 2) * 56;
+      this.players[i].y = this.players[i].ty = this.height * CONFIG.PLAYER_START_Y;
+    }
 
     this.bullets = [];
     this.ebullets = [];
@@ -152,6 +210,7 @@
     this.items = [];
     this.particles = [];
     this.floaters = [];       // 飘字
+    this.shockwaves = [];     // 护盾破裂 / 散射冲击波
 
     this.score = 0;
     this.kills = 0;
@@ -165,13 +224,19 @@
     this.spawnT = 1.0;
     this.events = [];
     this.elapsedReal = 0;
+    this.spectateSlot = -1;      // 观战目标（-1 = 自动挑一个活着的队友）
 
     // 统计
     this.stats = {
       shotsFired: 0, hits: 0, damageTaken: 0, itemsByKind: {},
-      killsByKind: {}, levelUps: 0
+      killsByKind: {}, levelUps: 0, shieldsBroken: 0
     };
   };
+
+  // 兼容旧写法：this.player 始终指向 0 号位
+  Object.defineProperty(GameModel.prototype, 'player', {
+    get: function () { return this.players[this.localSlot] || this.players[0]; }
+  });
 
   GameModel.prototype.emit = function (type, data) {
     var e = { type: type };
@@ -181,15 +246,75 @@
 
   /* -------------------------------------------------------------- 输入接口 */
   // 拖动：按位移移动（相对拖动，不会因为手指落点而瞬移）
-  GameModel.prototype.dragBy = function (dx, dy) {
-    var p = this.player;
+  GameModel.prototype.dragBy = function (dx, dy) { this.dragBySlot(this.localSlot, dx, dy); };
+  GameModel.prototype.dragTo = function (x, y) { this.dragToSlot(this.localSlot, x, y); };
+
+  GameModel.prototype.dragBySlot = function (slot, dx, dy) {
+    var p = this.players[slot];
+    if (!p) return;
     p.tx = clamp(p.tx + dx, 30, this.width - 30);
     p.ty = clamp(p.ty + dy, 60, this.height - 40);
   };
-  GameModel.prototype.dragTo = function (x, y) {
-    var p = this.player;
+  GameModel.prototype.dragToSlot = function (slot, x, y) {
+    var p = this.players[slot];
+    if (!p) return;
     p.tx = clamp(x, 30, this.width - 30);
     p.ty = clamp(y, 60, this.height - 40);
+  };
+
+  GameModel.prototype.aliveCount = function () {
+    var n = 0;
+    for (var i = 0; i < this.players.length; i++) {
+      var p = this.players[i];
+      if (p.alive && !p.left) n++;
+    }
+    return n;
+  };
+
+  /* ------------------------------------------------------------ 观战 */
+  /* 自己倒下之后，镜头（这里就是高亮标记）跟着一名活着的队友走。
+     spectateSlot = -1 表示「自动挑一个」；点屏幕会按 P1→P4 顺序轮换。 */
+  GameModel.prototype.isLocalDown = function () {
+    var me = this.players[this.localSlot];
+    return !!me && !me.alive;
+  };
+
+  GameModel.prototype.spectateTarget = function () {
+    if (!this.isLocalDown()) return null;
+    var cur = this.players[this.spectateSlot];
+    if (cur && cur.alive && !cur.left && cur.slot !== this.localSlot) return cur;
+    // 自动挑一个活着的队友（优先排在前面、生命值高的）
+    var best = null;
+    for (var i = 0; i < this.players.length; i++) {
+      var p = this.players[i];
+      if (!p.alive || p.left || p.slot === this.localSlot) continue;
+      if (!best || p.hp > best.hp) best = p;
+    }
+    this.spectateSlot = best ? best.slot : -1;
+    return best;
+  };
+
+  // 轮换到下一个活着的队友
+  GameModel.prototype.cycleSpectate = function () {
+    if (!this.isLocalDown()) return null;
+    var n = this.players.length, start = this.spectateSlot < 0 ? -1 : this.spectateSlot;
+    for (var k = 1; k <= n; k++) {
+      var s = (start + k + n * 2) % n;
+      var p = this.players[s];
+      if (p && p.alive && !p.left && p.slot !== this.localSlot) {
+        this.spectateSlot = s;
+        this.emit('spectate', { slot: s });
+        return p;
+      }
+    }
+    return null;
+  };
+
+  // 复活倒计时（秒，向上取整）
+  GameModel.prototype.respawnIn = function () {
+    var me = this.players[this.localSlot];
+    if (!me || me.alive) return 0;
+    return Math.max(0, me.downT);
   };
 
   /* ------------------------------------------------------------ 帧更新 */
@@ -203,13 +328,14 @@
     this.events.length = 0;
 
     this._updateDifficulty();
-    this._updatePlayer(dt);
+    this._updatePlayers(dt);
     this._updateSpawner(dt);
     this._updateEnemies(dt);
     this._updateBullets(dt);
     this._updateEnemyBullets(dt);
     this._updateItems(dt);
     this._updateParticles(dt);
+    this._updateShockwaves(dt);
     this._collide();
 
     // 存活得分（要求 10）
@@ -220,12 +346,12 @@
       if (this.comboT <= 0) this.combo = 0;
     }
 
-    if (this.player.hp <= 0) this._gameOver();
+    if (this.aliveCount() === 0) this._gameOver();
     return this;
   };
 
   GameModel.prototype._updateDifficulty = function () {
-    var d = difficultyAt(this.time);
+    var d = difficultyAt(this.time, this.playerCount);
     this.diff = d;
     if (d.level > this.level) {
       var gain = CONFIG.LEVEL_BONUS * d.level;
@@ -237,26 +363,49 @@
     }
   };
 
-  GameModel.prototype._updatePlayer = function (dt) {
-    var p = this.player;
+  GameModel.prototype._updatePlayers = function (dt) {
     var k = 1 - Math.exp(-CONFIG.PLAYER_SPEED_SMOOTH * dt);
-    p.x = lerp(p.x, p.tx, k);
-    p.y = lerp(p.y, p.ty, k);
-    if (p.invul > 0) p.invul -= dt;
-    if (p.shield > 0) {
-      p.shield -= dt;
-      if (p.shield <= 0) { p.shield = 0; this.emit('shieldEnd'); }
-    }
-    // 持续向前方射击（要求 6）
-    p.fireCd -= dt;
-    if (p.fireCd <= 0) {
-      p.fireCd = CONFIG.FIRE_CD[p.weapon];
-      this._fire();
+    for (var i = 0; i < this.players.length; i++) {
+      var p = this.players[i];
+      if (p.left) continue;                      // 已离场的玩家不再参与
+      if (!p.alive) {
+        // 联机时阵亡可以复活；单人时靠 update() 里的 aliveCount 直接结束
+        if (this.playerCount > 1) {
+          p.downT -= dt;
+          if (p.downT <= 0) this._respawn(p);
+        }
+        continue;
+      }
+      p.x = lerp(p.x, p.tx, k);
+      p.y = lerp(p.y, p.ty, k);
+      if (p.invul > 0) p.invul -= dt;
+      // 持续向前方射击（要求 6）
+      p.fireCd -= dt;
+      if (p.fireCd <= 0) {
+        p.fireCd = CONFIG.FIRE_CD[p.weapon];
+        this._fire(p);
+      }
     }
   };
 
-  GameModel.prototype._fire = function () {
-    var p = this.player, i, n, sp = CONFIG.BULLET_SPEED;
+  // 联机复活
+  GameModel.prototype._respawn = function (p) {
+    p.alive = true;
+    p.hp = Math.round(p.maxHp * CONFIG.MP.RESPAWN_HP);
+    p.invul = 2.0;
+    p.tx = clamp(this.width / 2, 30, this.width - 30);
+    p.ty = this.height * CONFIG.PLAYER_START_Y;
+    p.x = p.tx; p.y = p.ty;
+    p.weapon = Math.max(1, p.weapon - 1);        // 复活的代价：火力降一级
+    if (p.slot === this.localSlot) this.spectateSlot = -1;   // 自己回来了，退出观战
+    this.spawnParticles(p.x, p.y, 26, '#9fe8ff', 1.2);
+    this.shockwaves.push({ x: p.x, y: p.y, r: 8, maxR: 110, life: 0.5, max: 0.5, color: '#9fe8ff', width: 4 });
+    this.addFloater(p.x, p.y - 44, 'P' + (p.slot + 1) + ' 复活', '#9fe8ff', 1.4);
+    this.emit('respawn', { slot: p.slot });
+  };
+
+  GameModel.prototype._fire = function (owner) {
+    var p = owner || this.players[0], i, n, sp = CONFIG.BULLET_SPEED;
     var y = p.y - 30;
     var shots = [];
     switch (p.weapon) {
@@ -278,10 +427,30 @@
                  { x: p.x - 28, vx: -190, vy: -sp }, { x: p.x + 28, vx: 190, vy: -sp }];
     }
     for (i = 0, n = shots.length; i < n; i++) {
-      this.bullets.push({ x: shots[i].x, y: y, vx: shots[i].vx, vy: shots[i].vy, r: 5, dmg: CONFIG.BULLET_DMG });
+      this.bullets.push({
+        x: shots[i].x, y: y, vx: shots[i].vx, vy: shots[i].vy,
+        r: 5, dmg: CONFIG.BULLET_DMG, kind: 'normal', owner: p.slot
+      });
     }
     this.stats.shotsFired += shots.length;
-    this.emit('shoot', { weapon: p.weapon });
+    this.emit('shoot', { weapon: p.weapon, slot: p.slot });
+  };
+
+  /* 火力满级后再拾取升级道具：立刻朝四面八方打出红色散弹 */
+  GameModel.prototype._powerNova = function (p) {
+    var n = CONFIG.POWER_NOVA_COUNT, sp = CONFIG.POWER_NOVA_SPEED;
+    var a0 = this.rng.range(0, Math.PI * 2);
+    for (var i = 0; i < n; i++) {
+      var a = a0 + (Math.PI * 2 * i) / n;
+      this.bullets.push({
+        x: p.x, y: p.y,
+        vx: Math.cos(a) * sp, vy: Math.sin(a) * sp,
+        r: 8, dmg: CONFIG.POWER_NOVA_DMG, kind: 'nova', owner: p.slot
+      });
+    }
+    this.shockwaves.push({ x: p.x, y: p.y, r: 10, maxR: 124, life: 0.4, max: 0.4, color: '#ff8a5c', width: 6 });
+    this.spawnParticles(p.x, p.y, 20, '#ff9a6b', 1.1);
+    this.emit('nova', { slot: p.slot });
   };
 
   /* ------------------------------------------------------------ 敌机生成 */
@@ -353,11 +522,12 @@
     var d = this.diff;
     var def = CONFIG.ENEMY.boss;
     var cycle = Math.floor(this.time / CONFIG.BOSS_EVERY);
+    var mpBoss = 1 + CONFIG.MP.BOSS_HP_PER_PLAYER * (this.playerCount - 1);
     var e = {
       kind: 'boss',
       x: this.width / 2, y: -140,
       w: def.w, h: def.h, r: def.r,
-      hp: Math.ceil(def.hp * (1 + 0.55 * (cycle - 1)) * d.enemyHp * 0.34),
+      hp: Math.ceil(def.hp * (1 + 0.55 * (cycle - 1)) * d.enemyHp * 0.34 * mpBoss),
       maxHp: 0,
       vy: 62, vx: 0,
       pattern: 'boss',
@@ -501,7 +671,20 @@
     for (i = b.length - 1; i >= 0; i--) {
       b[i].x += b[i].vx * dt;
       b[i].y += b[i].vy * dt;
-      if (b[i].y < -30 || b[i].x < -30 || b[i].x > this.width + 30) b.splice(i, 1);
+      // 散射弹会朝四面八方飞，所以上下左右都要判出界
+      if (b[i].y < -30 || b[i].y > this.height + 30 ||
+          b[i].x < -30 || b[i].x > this.width + 30) b.splice(i, 1);
+    }
+  };
+
+  /* 冲击波（护盾破裂 / 火力散射 / 复活）——纯表现，不影响判定 */
+  GameModel.prototype._updateShockwaves = function (dt) {
+    var w = this.shockwaves, i;
+    for (i = w.length - 1; i >= 0; i--) {
+      w[i].life -= dt;
+      var k = 1 - Math.max(0, w[i].life) / w[i].max;
+      w[i].r = w[i].maxR * (0.25 + 0.75 * k);
+      if (w[i].life <= 0) w.splice(i, 1);
     }
   };
 
@@ -564,9 +747,9 @@
   }
 
   GameModel.prototype._collide = function () {
-    var i, j, b, e, p = this.player;
+    var i, j, b, e, p;
 
-    // 我方子弹 → 敌机
+    // 我方子弹 → 敌机（记录击杀者用于战功统计）
     for (i = this.bullets.length - 1; i >= 0; i--) {
       b = this.bullets[i];
       for (j = this.enemies.length - 1; j >= 0; j--) {
@@ -575,67 +758,102 @@
         if (hitCircle(b, b.r, e, e.r)) {
           this.bullets.splice(i, 1);
           this.stats.hits++;
-          this._damageEnemy(e, b.dmg, b.x, b.y);
+          this._damageEnemy(e, b.dmg, b.x, b.y, b.owner);
           break;
         }
       }
     }
 
-    // 敌弹 → 玩家
-    if (p.invul <= 0 && p.shield <= 0) {
-      for (i = this.ebullets.length - 1; i >= 0; i--) {
-        b = this.ebullets[i];
-        if (hitCircle(b, b.r * 0.75, p, CONFIG.PLAYER_HIT_R)) {
-          this.ebullets.splice(i, 1);
-          this._damagePlayer(this.bulletDamage(), b.x, b.y);
-          if (p.invul > 0) break;
+    for (var s = 0; s < this.players.length; s++) {
+      p = this.players[s];
+      if (!p.alive) continue;
+
+      // 敌弹 → 玩家（护盾会在这里被打破）
+      if (p.invul <= 0) {
+        for (i = this.ebullets.length - 1; i >= 0; i--) {
+          b = this.ebullets[i];
+          if (hitCircle(b, b.r * 0.75, p, CONFIG.PLAYER_HIT_R)) {
+            this.ebullets.splice(i, 1);
+            this._damagePlayer(p, this.bulletDamage(), b.x, b.y);
+            if (p.invul > 0) break;
+          }
         }
       }
-    }
 
-    // 敌机 → 玩家（撞机）
-    for (i = this.enemies.length - 1; i >= 0; i--) {
-      e = this.enemies[i];
-      if (e.delay > 0) continue;
-      if (hitCircle(e, e.r * 0.82, p, CONFIG.PLAYER_HIT_R)) {
-        if (p.shield > 0 || p.invul > 0) {
-          if (!e.boss) this._damageEnemy(e, 9999, e.x, e.y);
-        } else {
-          this._damagePlayer(this.ramDamage(), p.x, p.y);
-          if (!e.boss) this._damageEnemy(e, 9999, e.x, e.y);
+      // 敌机 → 玩家（撞机）
+      for (i = this.enemies.length - 1; i >= 0; i--) {
+        e = this.enemies[i];
+        if (e.delay > 0) continue;
+        if (hitCircle(e, e.r * 0.82, p, CONFIG.PLAYER_HIT_R)) {
+          if (p.shieldCharges > 0) {
+            this._consumeShield(p, e.x, e.y);
+            if (!e.boss) this._damageEnemy(e, 9999, e.x, e.y, p.slot);
+          } else if (p.invul > 0) {
+            if (!e.boss) this._damageEnemy(e, 9999, e.x, e.y, p.slot);
+          } else {
+            this._damagePlayer(p, this.ramDamage(), p.x, p.y);
+            if (!e.boss) this._damageEnemy(e, 9999, e.x, e.y, p.slot);
+          }
         }
       }
-    }
 
-    // 道具 → 玩家（吸附范围有限，别让站桩也能全自动捡）
-    for (i = this.items.length - 1; i >= 0; i--) {
-      var it = this.items[i];
-      if (Math.abs(it.x - p.x) < 78 && Math.abs(it.y - p.y) < 100) {
-        var dx = p.x - it.x, dy = p.y - it.y;
-        it.x += dx * 0.16; it.y += dy * 0.16;
-      }
-      if (hitCircle(it, 26, p, CONFIG.PLAYER_HIT_R + 22)) {
-        this._pickItem(it);
-        this.items.splice(i, 1);
+      // 道具 → 玩家（吸附范围有限，别让站桩也能全自动捡）
+      for (i = this.items.length - 1; i >= 0; i--) {
+        var it = this.items[i];
+        if (Math.abs(it.x - p.x) < 78 && Math.abs(it.y - p.y) < 100) {
+          var dx = p.x - it.x, dy = p.y - it.y;
+          it.x += dx * 0.16; it.y += dy * 0.16;
+        }
+        if (hitCircle(it, 26, p, CONFIG.PLAYER_HIT_R + 22)) {
+          this._pickItem(it, p);
+          this.items.splice(i, 1);
+        }
       }
     }
   };
 
   GameModel.prototype.bulletDamage = function () {
-    return CONFIG.EBULLET_DMG + CONFIG.EBULLET_DMG_PER_LV * (this.level - 1);
+    return CONFIG.EBULLET_DMG * damageScale(this.diff || difficultyAt(this.time, this.playerCount));
   };
   GameModel.prototype.ramDamage = function () {
-    return CONFIG.PLAYER_RAM_DMG + CONFIG.PLAYER_RAM_PER_LV * (this.level - 1);
+    return CONFIG.PLAYER_RAM_DMG * damageScale(this.diff || difficultyAt(this.time, this.playerCount));
   };
 
-  GameModel.prototype._damageEnemy = function (e, dmg, hx, hy) {
+  /* 护盾改成「一次免伤机会」：命中时吃掉一层，触发护盾破裂效果 */
+  GameModel.prototype._consumeShield = function (p, hx, hy) {
+    if (p.shieldCharges <= 0) return false;
+    p.shieldCharges--;
+    this.stats.shieldsBroken++;
+    p.invul = Math.max(p.invul, CONFIG.SHIELD_BREAK_INVUL);
+
+    // 破裂冲击波：把附近的敌弹一并震碎
+    var R = CONFIG.SHIELD_BREAK_RADIUS, R2 = R * R, i, b, dx, dy;
+    for (i = this.ebullets.length - 1; i >= 0; i--) {
+      b = this.ebullets[i];
+      dx = b.x - p.x; dy = b.y - p.y;
+      if (dx * dx + dy * dy <= R2) {
+        this.spawnParticles(b.x, b.y, 2, '#bfe9ff', 0.5);
+        this.ebullets.splice(i, 1);
+      }
+    }
+    this.shockwaves.push({
+      x: p.x, y: p.y, r: 12, maxR: R, life: 0.45, max: 0.45,
+      color: '#9fe8ff', width: 5
+    });
+    this.spawnParticles(p.x, p.y, 28, '#cdefff', 1.4);
+    this.addFloater(p.x, p.y - 40, '护盾破裂！', '#9fe8ff', 1.0);
+    this.emit('shieldBreak', { slot: p.slot, charges: p.shieldCharges, x: p.x, y: p.y });
+    return true;
+  };
+
+  GameModel.prototype._damageEnemy = function (e, dmg, hx, hy, ownerSlot) {
     e.hp -= dmg;
     if (e.hurt <= 0) e.hurt = 0.05;    // 连射时不要一直保持白闪
     if (hx !== undefined) this.spawnParticles(hx, hy, 3, '#9fe8ff', 0.5);
-    if (e.hp <= 0) this._killEnemy(e);
+    if (e.hp <= 0) this._killEnemy(e, ownerSlot);
   };
 
-  GameModel.prototype._killEnemy = function (e) {
+  GameModel.prototype._killEnemy = function (e, ownerSlot) {
     var idx = this.enemies.indexOf(e);
     if (idx >= 0) this.enemies.splice(idx, 1);
 
@@ -649,6 +867,9 @@
     this.score += gain;
     this.kills++;
     this.stats.killsByKind[e.kind] = (this.stats.killsByKind[e.kind] || 0) + 1;
+    // 战功记在开火的人头上
+    var killer = this.players[ownerSlot];
+    if (killer) { killer.kills++; killer.score += gain; }
 
     this.spawnParticles(e.x, e.y, e.boss ? 90 : 16, e.boss ? '#ffd166' : '#ffd8a8', e.boss ? 2.2 : 1);
     this.addFloater(e.x, e.y - 10, '+' + gain, mul > 1.2 ? '#ffd166' : '#ffffff', 0.9);
@@ -674,20 +895,31 @@
     }
   };
 
-  GameModel.prototype._damagePlayer = function (dmg, hx, hy) {
-    var p = this.player;
-    if (p.invul > 0 || p.shield > 0) return;
+  GameModel.prototype._damagePlayer = function (p, dmg, hx, hy) {
+    if (!p || !p.alive) return false;
+    if (p.invul > 0) return false;
+    // 有护盾：先消耗一次免伤机会
+    if (p.shieldCharges > 0) { this._consumeShield(p, hx, hy); return false; }
+
     p.hp -= dmg;
     p.invul = CONFIG.PLAYER_INVUL;
     this.stats.damageTaken += dmg;
     this.combo = 0;
     this.spawnParticles(hx || p.x, hy || p.y, 14, '#ff8a8a', 1);
-    this.emit('hurt', { hp: p.hp, dmg: dmg });
-    if (p.hp <= 0) { p.hp = 0; p.alive = false; }
+    this.emit('hurt', { hp: p.hp, dmg: dmg, slot: p.slot });
+    if (p.hp <= 0) {
+      p.hp = 0;
+      p.alive = false;
+      p.downT = CONFIG.MP.RESPAWN_DELAY;
+      this.spawnParticles(p.x, p.y, 40, '#ffb0b0', 1.6);
+      this.shockwaves.push({ x: p.x, y: p.y, r: 10, maxR: 140, life: 0.6, max: 0.6, color: '#ff8a8a', width: 5 });
+      this.emit('down', { slot: p.slot });
+    }
+    return true;
   };
 
-  GameModel.prototype._pickItem = function (it) {
-    var p = this.player;
+  GameModel.prototype._pickItem = function (it, who) {
+    var p = who || this.players[0];
     var gain = CONFIG.PICKUP_SCORE[it.kind] || 50;
     this.score += gain;
     this.itemsGot++;
@@ -701,22 +933,23 @@
         break;
       case 'power':
         if (p.weapon < 5) { p.weapon++; label = '火力 Lv.' + p.weapon; }
-        else { label = '火力已满 +' + gain; }
+        else { this._powerNova(p); label = '火力全开·散射'; }
         break;
       case 'shield':
-        p.shield = p.shield > 0
-          ? Math.min(CONFIG.SHIELD_TIME, p.shield + CONFIG.SHIELD_STACK)
-          : CONFIG.SHIELD_TIME;
-        label = '护盾 ' + p.shield.toFixed(1) + 's';
+        var before = p.shieldCharges;
+        p.shieldCharges = Math.min(CONFIG.SHIELD_CHARGES_MAX, p.shieldCharges + 1);
+        label = before >= CONFIG.SHIELD_CHARGES_MAX
+          ? '护盾已满 +' + gain
+          : '护盾 ×' + p.shieldCharges;
         break;
       case 'angel':
         this._angelBlast();
         label = '天使降临！';
         break;
     }
-    this.addFloater(p.x, p.y - 44, label + '  +' + gain, '#9fe8ff', 1.1);
+    this.addFloater(p.x, p.y - 44, 'P' + (p.slot + 1) + ' ' + label + '  +' + gain, '#9fe8ff', 1.1);
     this.spawnParticles(it.x, it.y, 12, '#9fe8ff', 0.7);
-    this.emit('pickup', { kind: it.kind, score: gain });
+    this.emit('pickup', { kind: it.kind, score: gain, slot: p.slot });
   };
 
   // 终极道具：清屏 + 全体伤害
@@ -730,7 +963,12 @@
       e = this.enemies[i];
       this._damageEnemy(e, e.boss ? 60 : 9999, e.x, e.y);
     }
-    this.player.invul = Math.max(this.player.invul, CONFIG.ANGEL_INVUL);
+    for (i = 0; i < this.players.length; i++) {
+      var pl = this.players[i];
+      if (!pl.alive) continue;
+      pl.invul = Math.max(pl.invul, CONFIG.ANGEL_INVUL);
+      this.shockwaves.push({ x: pl.x, y: pl.y, r: 10, maxR: 150, life: 0.6, max: 0.6, color: '#ffe6a8', width: 5 });
+    }
     this.emit('angel');
   };
 
@@ -745,6 +983,15 @@
   };
 
   GameModel.prototype.result = function () {
+    var me = this.players[this.localSlot] || this.players[0];
+    var board = [];
+    for (var i = 0; i < this.players.length; i++) {
+      var p = this.players[i];
+      board.push({
+        slot: p.slot, kills: p.kills, score: Math.floor(p.score),
+        hp: Math.max(0, Math.round(p.hp)), weapon: p.weapon, alive: p.alive
+      });
+    }
     return {
       score: Math.floor(this.score),
       time: this.time,
@@ -752,9 +999,11 @@
       kills: this.kills,
       items: this.itemsGot,
       bestCombo: this.bestCombo,
-      hp: Math.max(0, Math.round(this.player.hp)),
-      maxHp: this.player.maxHp,
-      weapon: this.player.weapon,
+      hp: Math.max(0, Math.round(me.hp)),
+      maxHp: me.maxHp,
+      weapon: me.weapon,
+      players: this.playerCount,
+      board: board,
       stats: this.stats
     };
   };
@@ -764,6 +1013,7 @@
     GameModel: GameModel,
     RNG: RNG,
     difficultyAt: difficultyAt,
+    damageScale: damageScale,
     weightedPick: weightedPick,
     clamp: clamp,
     lerp: lerp

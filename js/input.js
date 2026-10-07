@@ -30,8 +30,19 @@
     var self = this;
     var c = this.canvas;
 
+    // 阵亡观战时，战机已经不存在了，点屏幕改成「切换观看的队友」（回调由 main.js 注入）
+    function spectating() {
+      var m = self.model;
+      return !!(m && typeof m.isLocalDown === 'function' && m.isLocalDown());
+    }
+
     function down(ev) {
       if (!self.enabled) return;
+      if (spectating()) {
+        if (self.onTapWhileDown) self.onTapWhileDown();
+        ev.preventDefault();
+        return;
+      }
       var v = self._toVirtual(ev.clientX, ev.clientY);
       self.dragging = true;
       self.last = v;
@@ -47,6 +58,7 @@
 
     function move(ev) {
       if (!self.enabled) return;
+      if (spectating()) return;          // 观战期间画面不动
       var v = self._toVirtual(ev.clientX, ev.clientY);
       if (ev.pointerType === 'mouse') {
         if (self.dragging || ev.buttons === 0) {

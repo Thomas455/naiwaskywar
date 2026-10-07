@@ -95,6 +95,22 @@
     this._tone({ type: 'sawtooth', f0: 300, f1: 80, dur: 0.32, vol: 0.2 });
     this._noise(0.3, 0.18, 700, 120);
   };
+  // 护盾破裂：玻璃碎裂感（高频噪声 + 下滑音）
+  Sfx.prototype.shieldBreak = function () {
+    this._noise(0.34, 0.30, 5200, 700);
+    this._tone({ type: 'square', f0: 1180, f1: 320, dur: 0.26, vol: 0.16 });
+    var self = this;
+    setTimeout(function () {
+      self._noise(0.18, 0.16, 3600, 500);
+      self._tone({ type: 'triangle', f0: 760, f1: 220, dur: 0.2, vol: 0.12 });
+    }, 60);
+  };
+  // 火力满级散射：一记重炮
+  Sfx.prototype.nova = function () {
+    this._noise(0.28, 0.26, 2400, 200);
+    this._tone({ type: 'sawtooth', f0: 240, f1: 70, dur: 0.34, vol: 0.2 });
+    this._tone({ type: 'square', f0: 900, f1: 1500, dur: 0.12, vol: 0.1 });
+  };
   Sfx.prototype.pickup = function (kind) {
     var base = kind === 'angel' ? 700 : 880;
     this._tone({ type: 'sine', f0: base, f1: base * 2, dur: 0.13, vol: 0.16 });
