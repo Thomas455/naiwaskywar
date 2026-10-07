@@ -64,6 +64,7 @@
     this._toastTimer = null;
     this._current = 'menu';
     this._sponsorFrom = 'menu';
+    this._confirmFrom = null;
   }
 
   UI.prototype.show = function (name) {
@@ -101,13 +102,23 @@
     this.el.confirmText.textContent = opts.text || '';
     this.el.btnConfirmYes.textContent = opts.okText || '确定';
     this._confirmCb = opts.onOk || null;
+    this._confirmFrom = this.currentScreen();     // 记住从哪个界面弹出来的
     this.show('confirm');
   };
 
+  /* 确定 → 执行回调（回调自己负责切到下一个界面）
+   * 取消 → 必须回到弹出前的那个界面，否则点了跟没点一样（以前就是漏了这一步） */
   UI.prototype.resolveConfirm = function (ok) {
     var cb = this._confirmCb;
     this._confirmCb = null;
-    if (ok && cb) cb();
+    if (ok) {
+      if (cb) cb();
+      return;
+    }
+    var back = this._confirmFrom || 'menu';
+    this._confirmFrom = null;
+    this._current = back;
+    this.show(back);
   };
 
   /* 轻提示：屏幕底部飘一句，几秒后自动消失 */
@@ -189,7 +200,41 @@
     } catch (e) { return false; }
   };
 
-  /* 自检用：读回 canvas 像素验证二维码的几何是否合规 */
+  /* 自检用：当前界面上每个按钮的位置，以及该位置最顶层的元素是不是它自己。
+   * 「按钮点不了」基本都是被别的东西盖住了 / 跑到可视区外了，这里能一次看出来。 */
+  UI.prototype.hitTest = function () {
+    var out = [];
+    var name = this.currentScreen();
+    var scr = this.el[name];
+    if (!scr) return { screen: name, buttons: [] };
+    var rect = scr.getBoundingClientRect();
+    var btns = scr.querySelectorAll('button');
+    var scrollable = scr.scrollHeight > scr.clientHeight + 1;
+    for (var i = 0; i < btns.length; i++) {
+      var b = btns[i];
+      if (b.classList.contains('hidden')) continue;
+      // 先滚到它跟前再判定 —— 内容超长时「要滚动才能看到」是正常的，
+      // 真正要抓的是「怎么滚都够不到 / 被别的东西盖住」
+      try { if (b.scrollIntoView) b.scrollIntoView({ block: 'center' }); } catch (e) {}
+      var r = b.getBoundingClientRect();
+      var cx = Math.round(r.left + r.width / 2);
+      var cy = Math.round(r.top + r.height / 2);
+      var top = null;
+      try { top = root.document.elementFromPoint(cx, cy); } catch (e) { top = null; }
+      var ok = !!(top && (top === b || b.contains(top)));
+      var r2 = scr.getBoundingClientRect();
+      var visible = r.width > 4 && r.height > 4 &&
+                    r.top >= r2.top - 1 && r.bottom <= r2.bottom + 1;
+      out.push({
+        label: (b.textContent || '').trim().slice(0, 12),
+        hit: ok, visible: visible,
+        top: top ? (top.tagName + (top.id ? '#' + top.id : '') + (top.className ? '.' + String(top.className).split(' ')[0] : '')) : 'null',
+        y: Math.round(r.top), h: Math.round(r.height)
+      });
+    }
+    try { scr.scrollTop = 0; } catch (e) {}
+    return { screen: name, scrollable: scrollable, scrollTop: 0, scrollH: scr.scrollHeight, clientH: scr.clientHeight, buttons: out };
+  };
   UI.prototype.verifyQr = function () {
     var cv = this.el.qrCanvas;
     var info = this._qrInfo;

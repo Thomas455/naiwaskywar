@@ -45,6 +45,7 @@
   var SNAP_HZ = 20;      // 主机每秒广播多少次世界快照
   var INPUT_HZ = 30;     // 客人每秒发送多少次输入
   var STALL_MS = 5000;   // 客人端多久没收到快照就认为房主卡住了
+  var SMOOTH_RATE = 22;  // 快照之间位置收敛速度（越大越跟手，越小越顺滑）
   var lastPingAt = 0;    // 延迟刷新节流
 
   function isMultiplayer() { return mp.mode === 'host' || mp.mode === 'client'; }
@@ -768,6 +769,9 @@
       }
       var cw = mp.world;
       if (cw) {
+        // 快照之间的平滑：别的玩家 / 敌机朝权威位置收敛，子弹按速度外推。
+        // 不做这步的话 20Hz 的快照会让非房主看到的东西一顿一顿的。
+        if (!mp.paused) Net.smoothWorld(cw, dt, { rate: SMOOTH_RATE });
         // 冲击波 / 粒子这类纯表现的东西在本地推进，快照到来时会被覆盖
         if (!mp.paused && cw.shockwaves) {
           for (var si = cw.shockwaves.length - 1; si >= 0; si--) {
@@ -1220,7 +1224,7 @@
       } else {
         setTimeout(function () { toMenu(); }, 160);
         var sm = /[?&]show=(\w+)/.exec(root.location.search);
-        if (sm && /^(help|pause|mp|host|join|wait|confirm|sponsor)$/.test(sm[1])) {
+        if (sm && /^(menu|help|pause|mp|host|join|wait|confirm|sponsor|over)$/.test(sm[1])) {
           setTimeout(function () {
             if (sm[1] === 'pause') {
               // ?show=pause&role=host|guest|solo —— 预览三种角色的暂停面板
@@ -1230,6 +1234,23 @@
               ui.ask({ title: '离开房间', text: '确定要离开这个房间吗？对局还在继续，离开后就回不来了。', okText: '离开房间' });
             } else {
               ui.show(sm[1]);
+            }
+            // ?hittest=1：把当前界面上每个按钮能不能点到报告出来
+            if (/[?&]hittest=1/.test(root.location.search)) {
+              setTimeout(function () {
+                var r = ui.hitTest();
+                var pre = document.createElement('pre');
+                pre.id = 'hittest';
+                pre.style.cssText = 'position:fixed;left:0;top:0;z-index:99;background:#000c;color:#0f0;font-size:11px;padding:6px;max-width:100%;white-space:pre-wrap';
+                var lines = ['screen=' + r.screen + ' scrollable=' + r.scrollable + ' overflow=' + (r.scrollH - r.clientH) +
+                             ' clientH=' + r.clientH + ' scrollH=' + r.scrollH];
+                r.buttons.forEach(function (b) {
+                  lines.push((b.hit && b.visible ? 'OK  ' : '★BAD') + ' [' + b.label + '] hit=' + b.hit +
+                             ' visible=' + b.visible + ' y=' + b.y + ' h=' + b.h + ' top=' + b.top);
+                });
+                pre.textContent = lines.join('\n');
+                document.body.appendChild(pre);
+              }, 900);
             }
           }, 420);
         }

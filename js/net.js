@@ -150,12 +150,16 @@
     for (i = 0; i < snap.p.length; i++) {
       a = snap.p[i];
       var prev = prevPlayers[i];
+      var pp = prevPlayers[i];
       world.players.push({
         slot: i, x: a[0], y: a[1], hp: a[2],
         maxHp: (root.NaiwaCore && root.NaiwaCore.CONFIG.PLAYER_MAX_HP) || 100,
         weapon: a[3], shieldCharges: a[4], invul: a[5], alive: !!a[6],
         score: a[7], kills: a[8], downT: a[9], left: !!a[10],
-        tx: prev ? prev.tx : a[0], ty: prev ? prev.ty : a[1]
+        tx: prev ? prev.tx : a[0], ty: prev ? prev.ty : a[1],
+        // 权威位置另存一份，渲染用的 x/y 会在两帧之间朝它平滑靠拢
+        sx: a[0], sy: a[1],
+        x0: pp ? pp.x : a[0], y0: pp ? pp.y : a[1]
       });
     }
 
@@ -167,7 +171,8 @@
       world.enemies.push({
         kind: kind, x: a[1], y: a[2], hp: a[3], maxHp: a[4], hurt: a[5] ? 0.05 : 0,
         boss: kind === 'boss', w: def.w, h: def.h, r: def.r,
-        delay: 0, pattern: 'straight', fire: 'none', fireCd: 99
+        delay: 0, pattern: 'straight', fire: 'none', fireCd: 99,
+        sx: a[1], sy: a[2]
       });
     }
 
@@ -189,7 +194,7 @@
     world.items = [];
     for (i = 0; i < snap.i.length; i++) {
       a = snap.i[i];
-      world.items.push({ kind: ITEM_KINDS[a[0]] || 'heal', x: a[1], y: a[2], t: 0 });
+      world.items.push({ kind: ITEM_KINDS[a[0]] || 'heal', x: a[1], y: a[2], t: 0, sx: a[1], sy: a[2] });
     }
 
     world.shockwaves = [];
@@ -293,6 +298,61 @@
   }
 
   function cl(v, a, b) { return v < a ? a : (v > b ? b : v); }
+
+  /* ------------------------------------------------- 快照之间的平滑
+   * 快照只有 20Hz，直接把坐标贴上去，别的玩家 / 敌机每 50ms 跳一格，
+   * 看起来就是一顿一顿的。两种补法：
+   *   · 子弹：速度恒定 → 直接按 vx/vy 外推，位置是精确的
+   *   · 玩家 / 敌机 / 道具：朝最新快照的权威位置做指数收敛（sx/sy 是目标）
+   * 本地玩家的战机不在这里处理 —— 它走 clientPredict 的预测路径。
+   */
+  function smoothWorld(world, dt, opts) {
+    if (!world || !(dt > 0)) return;
+    opts = opts || {};
+    var rate = opts.rate || 22;                       // 收敛速度：越大越跟手、越小越顺滑
+    var k = 1 - Math.exp(-rate * dt);
+    var i, e;
+
+    var players = world.players || [];
+    for (i = 0; i < players.length; i++) {
+      e = players[i];
+      if (e.slot === world.localSlot) continue;       // 自己走预测
+      if (e.sx === undefined) continue;
+      e.x += (e.sx - e.x) * k;
+      e.y += (e.sy - e.y) * k;
+    }
+
+    var enemies = world.enemies || [];
+    for (i = 0; i < enemies.length; i++) {
+      e = enemies[i];
+      if (e.sx === undefined) continue;
+      e.x += (e.sx - e.x) * k;
+      e.y += (e.sy - e.y) * k;
+    }
+
+    var items = world.items || [];
+    for (i = 0; i < items.length; i++) {
+      e = items[i];
+      if (e.sx === undefined) continue;
+      e.x += (e.sx - e.x) * k;
+      e.y += (e.sy - e.y) * k;
+    }
+
+    // 子弹匀速直线运动，外推比收敛更准，也不会拖尾
+    var bullets = world.bullets || [];
+    for (i = 0; i < bullets.length; i++) {
+      e = bullets[i];
+      e.x += (e.vx || 0) * dt;
+      e.y += (e.vy || 0) * dt;
+    }
+    var ebs = world.ebullets || [];
+    for (i = 0; i < ebs.length; i++) {
+      e = ebs[i];
+      e.x += (e.vx || 0) * dt;
+      e.y += (e.vy || 0) * dt;
+    }
+    return world;
+  }
 
   /* ------------------------------------------------------------- 主机 */
   function Host(opts) {
@@ -620,6 +680,7 @@
     parseJoinHash: parseJoinHash,
     encodeSnapshot: encodeSnapshot,
     decodeSnapshot: decodeSnapshot,
+    smoothWorld: smoothWorld,
     emptyWorld: emptyWorld,
     Host: Host,
     Client: Client

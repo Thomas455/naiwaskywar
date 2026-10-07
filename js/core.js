@@ -812,11 +812,18 @@
     }
   };
 
+  /* 伤害一律取整。
+   * 之前直接用 damageScale 的小数值（比如 9 × 1.5684 = 14.1158），血就会停在
+   * 0.0316 这种数上：界面四舍五入显示成「0 血」，但 p.hp > 0 所以人还活着、
+   * 还能操控，aliveCount() 也降不到 0 ——「全员 0 血但游戏不结束」就是这么来的。
+   * 取整之后「显示 0 血」和「已阵亡」永远一致。 */
   GameModel.prototype.bulletDamage = function () {
-    return CONFIG.EBULLET_DMG * damageScale(this.diff || difficultyAt(this.time, this.playerCount));
+    var raw = CONFIG.EBULLET_DMG * damageScale(this.diff || difficultyAt(this.time, this.playerCount));
+    return Math.max(1, Math.round(raw));
   };
   GameModel.prototype.ramDamage = function () {
-    return CONFIG.PLAYER_RAM_DMG * damageScale(this.diff || difficultyAt(this.time, this.playerCount));
+    var raw = CONFIG.PLAYER_RAM_DMG * damageScale(this.diff || difficultyAt(this.time, this.playerCount));
+    return Math.max(1, Math.round(raw));
   };
 
   /* 护盾改成「一次免伤机会」：命中时吃掉一层，触发护盾破裂效果 */
@@ -907,7 +914,9 @@
     this.combo = 0;
     this.spawnParticles(hx || p.x, hy || p.y, 14, '#ff8a8a', 1);
     this.emit('hurt', { hp: p.hp, dmg: dmg, slot: p.slot });
-    if (p.hp <= 0) {
+    // 阈值用 < 1 而不是 <= 0：只要界面会显示成「0 血」，就必须真的倒下，
+    // 否则会出现「0 血还能动、游戏也结束不了」的状态
+    if (p.hp < 1) {
       p.hp = 0;
       p.alive = false;
       p.downT = CONFIG.MP.RESPAWN_DELAY;

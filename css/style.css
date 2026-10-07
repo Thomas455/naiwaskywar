@@ -186,7 +186,12 @@ body::after {
   position: absolute;
   inset: 0;
   display: flex;
-  align-items: center;
+  /* 注意：这里不能用 align-items:center。内容比屏幕高的时候，
+     居中会让溢出部分同时向上向下跑，顶部那一截怎么滚都够不到
+     （「玩法说明看不到最上面」就是这个坑）。
+     改成 flex-start + 给 .panel 加 margin:auto —— 有空间时一样居中，
+     没空间时从顶部开始、可以正常滚动。 */
+  align-items: flex-start;
   justify-content: center;
   padding: 16px;
   background: radial-gradient(80% 60% at 50% 20%, rgba(20, 40, 80, 0.55), rgba(3, 5, 12, 0.9));
@@ -194,6 +199,8 @@ body::after {
   -webkit-backdrop-filter: blur(3px);
   z-index: 5;
   overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
   animation: fade-in 0.25s ease;
 }
 .screen.hidden, .hidden { display: none !important; }
@@ -204,6 +211,9 @@ body::after {
 .panel {
   width: 100%;
   max-width: 420px;
+  /* 配合 .screen 的 flex-start：有空间时上下居中，内容超高时从顶部开始且能滚到底 */
+  margin: auto;
+  flex: 0 0 auto;
   background: var(--panel);
   border: 1px solid var(--panel-line);
   border-radius: var(--radius);
