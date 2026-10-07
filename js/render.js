@@ -15,6 +15,10 @@
     this.scale = 1;
     this.VW = 480;
     this.VH = 854;
+    this.cssW = 480;
+    this.cssH = 854;
+    this.offsetX = 0;        // 联机 letterbox 时的左边距（CSS 像素）
+    this.offsetY = 0;        // 上边距
     this.shake = 0;
     this.flash = 0;          // 全屏白闪
     this.angelT = 0;         // 天使降临特写
@@ -115,16 +119,42 @@
   };
 
   /* --------------------------------------------------------- 尺寸与坐标 */
-  Renderer.prototype.resize = function (cssW, cssH) {
+  /* fixedVH：联机时客人必须用房主的逻辑高度。
+   * 否则房主在 480×770 的世界里跑模拟、客人在 480×1038 的世界里画同样的坐标，
+   * 队友的位置就会整个错位 —— 这是「其他玩家位置显示异常」的根因。
+   * 传了 fixedVH 就等比缩放 + 居中留黑边（letterbox），保证双方看到同一个战场。
+   */
+  Renderer.prototype.resize = function (cssW, cssH, fixedVH) {
+    this.cssW = cssW;
+    this.cssH = cssH;
     this.dpr = Math.min(root.devicePixelRatio || 1, 2.5);
-    this.scale = cssW / this.VW;
-    this.VH = Math.round(cssH / this.scale);
+
+    if (fixedVH && fixedVH > 0) {
+      this.VW = 480;
+      this.VH = Math.round(fixedVH);
+      this.scale = Math.min(cssW / this.VW, cssH / this.VH);
+      this.offsetX = (cssW - this.VW * this.scale) / 2;
+      this.offsetY = (cssH - this.VH * this.scale) / 2;
+    } else {
+      this.scale = cssW / this.VW;
+      this.VH = Math.round(cssH / this.scale);
+      this.offsetX = 0;
+      this.offsetY = 0;
+    }
+
     this.canvas.width = Math.round(cssW * this.dpr);
     this.canvas.height = Math.round(cssH * this.dpr);
     this.canvas.style.width = cssW + 'px';
     this.canvas.style.height = cssH + 'px';
     this._buildStars();
     return { width: this.VW, height: this.VH };
+  };
+
+  /* 客人收到房主的逻辑尺寸后，按它重新排版 */
+  Renderer.prototype.setWorldHeight = function (vh) {
+    if (!vh || Math.round(vh) === this.VH) return false;
+    this.resize(this.cssW, this.cssH, vh);
+    return true;
   };
 
   Renderer.prototype._buildStars = function () {
@@ -157,7 +187,13 @@
       sx = (Math.random() - 0.5) * this.shake;
       sy = (Math.random() - 0.5) * this.shake;
     }
-    ctx.setTransform(s, 0, 0, s, sx * s, sy * s);
+    // 先把整块画布刷成底色（联机 letterbox 时四周的黑边就靠这一步）
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.fillStyle = '#04060d';
+    ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+    ctx.setTransform(s, 0, 0, s,
+      (this.offsetX || 0) * this.dpr + sx * s,
+      (this.offsetY || 0) * this.dpr + sy * s);
 
     this._drawBackground(ctx, dt);
     this._drawAngel(ctx);          // 天使特效画在角色之下，免得挡住弹幕

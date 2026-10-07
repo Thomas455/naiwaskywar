@@ -309,6 +309,7 @@
     this.peer = null;
     this.conns = {};          // slot -> DataConnection
     this.slotOf = {};         // peerId -> slot
+    this._outbox = {};        // slot -> 连接还没开时先排队的消息
     this.sessionId = normalizeSessionId(opts.sessionId) || randomId4();
     this.destroyed = false;
     this._tries = 0;
@@ -359,18 +360,41 @@
     }
     this.conns[slot] = conn;
     this.slotOf[conn.peer] = slot;
+    this._outbox[slot] = [];
     this.onStatus('joined');
+
+    // 先把收发挂上，再谈发消息 —— PeerJS 在接收端触发 connection 时，
+    // 底层数据通道有可能还没完全 open，这时候 send 会被静默丢掉，
+    // 客人就永远收不到 welcome（表现为「加进来了但页面还停在输入房间号」）。
+    conn.on('data', function (msg) { self._onData(slot, msg); });
+    conn.on('close', function () { self._drop(slot); });
+    conn.on('error', function () { self._drop(slot); });
+    conn.on('open', function () { self._flush(slot); });
+    if (conn.open) this._flush(slot);
+
     // 先让上层处理（可能会把这位玩家补进正在进行的对局）
     this.onJoin(slot, { peer: conn.peer });
-    // 再把席位信息发给客人 —— 客人靠这条消息知道自己是谁
+    this._sendWelcome(slot);
+  };
+
+  // 席位信息：客人靠这条消息知道自己是谁、战场多大
+  Host.prototype._sendWelcome = function (slot) {
+    if (!this.conns[slot]) return;
     var extra = this.onWelcome ? (this.onWelcome(slot) || null) : null;
     var msg = { T: 'w', slot: slot, players: this.playerCount(), slots: this.slots() };
     if (extra) for (var k in extra) if (extra.hasOwnProperty(k)) msg[k] = extra[k];
     this._send(slot, msg);
+  };
 
-    conn.on('data', function (msg) { self._onData(slot, msg); });
-    conn.on('close', function () { self._drop(slot); });
-    conn.on('error', function () { self._drop(slot); });
+  // 连接一旦可用，把排队中的消息补发出去
+  Host.prototype._flush = function (slot) {
+    var q = this._outbox[slot];
+    var c = this.conns[slot];
+    if (!q || !c || !c.open) return;
+    for (var i = 0; i < q.length; i++) {
+      try { c.send(q[i]); } catch (e) {}
+    }
+    q.length = 0;
   };
 
   Host.prototype._drop = function (slot) {
@@ -378,6 +402,7 @@
     var conn = this.conns[slot];
     delete this.slotOf[conn.peer];
     delete this.conns[slot];
+    delete this._outbox[slot];
     this.onLeave(slot);
     this.onStatus('left');
     this.broadcast({ T: 'b', s: slot });
@@ -388,13 +413,22 @@
     switch (msg.T) {
       case 'i': this.onInput(slot, msg.x, msg.y); break;
       case 'p': this._send(slot, { T: 'o', t: msg.t }); break;
-      case 'h': this.onStatus('hello'); break;
+      // 客人连上后会打个招呼；顺手把 welcome 再发一遍，防止第一条丢了
+      case 'h': this.onStatus('hello'); this._sendWelcome(slot); break;
     }
   };
 
+  /* 发消息：连接还没开就先排队，等 open 事件到了再补发，
+   * 绝不静默丢弃（welcome 丢一次客人就卡在加入界面了）。 */
   Host.prototype._send = function (slot, obj) {
     var c = this.conns[slot];
-    if (!c || !c.open) return;
+    if (!c) return;
+    if (!c.open) {
+      var q = this._outbox[slot] || (this._outbox[slot] = []);
+      // 队列只留控制类消息，快照没必要囤
+      if (obj.T !== 's') q.push(obj);
+      return;
+    }
     try { c.send(obj); } catch (e) {}
   };
 
@@ -443,8 +477,10 @@
     this.latency = 0;
     this.lastSnapshotAt = 0;      // 最近一次收到世界快照的时刻（看门狗用）
     this.snapshotCount = 0;
+    this.gotWelcome = false;      // 有没有收到过席位信息
     this.destroyed = false;
     this._pingTimer = null;
+    this._welcomeTimer = null;
   }
 
   /* 房主那边卡住 / 掉线了吗？
@@ -480,6 +516,14 @@
         self.onStatus('connected');
         conn.send({ T: 'h' });
         self._startPing();
+        // 兜底：连上了但一直没收到 welcome（房主那边 send 被丢 / 版本不一致），
+        // 不能让玩家干等在「加入房间」界面，明确报错并重试一次
+        clearTimeout(self._welcomeTimer);
+        self._welcomeTimer = setTimeout(function () {
+          if (self.gotWelcome || self.destroyed) return;
+          try { conn.send({ T: 'h' }); } catch (e) {}
+          self.onError('已经连上房主，但没收到房间信息。请让房主重新开一次房间，或检查两边版本是否一致。');
+        }, 6000);
       });
       conn.on('data', function (msg) { self._onData(msg); });
       conn.on('close', function () { clearTimeout(timer); self.onClose(); });
@@ -503,6 +547,8 @@
     switch (msg.T) {
       case 'w':
         this.localSlot = msg.slot;
+        this.gotWelcome = true;
+        clearTimeout(this._welcomeTimer);
         this.onWelcome(msg);
         break;
       case 's':

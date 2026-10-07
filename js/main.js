@@ -38,6 +38,7 @@
     netAcc: 0,           // 发送节流累加器
     inputAcc: 0,
     connected: false,
+    worldVH: 0,          // 联机时房主的战场逻辑高度（客人照它排版）
     resultShown: false,
     paused: false        // 联机暂停：房主发起，客人跟随
   };
@@ -64,21 +65,38 @@
   }
 
   /* --------------------------------------------------------------- 尺寸 */
+  /* 联机时客人必须套用房主的逻辑尺寸，否则双方战场高度不同、队友位置会整体错位。
+   * 所以客人的 resize 传 fixedVH，渲染层会等比缩放并居中留黑边。 */
+  function hostVH() {
+    return (isClient() && mp.worldVH) ? mp.worldVH : 0;
+  }
+
   function fit() {
     var r = stage.getBoundingClientRect();
-    var size = renderer.resize(r.width, r.height);
+    var size = renderer.resize(r.width, r.height, hostVH());
     var w = activeWorld();
     if (w && w.players) {
+      var fixed = !!hostVH();
       for (var i = 0; i < w.players.length; i++) {
         var p = w.players[i];
         p.tx = Core.clamp(p.tx, 30, size.width - 30);
         p.ty = Core.clamp(p.ty, 60, size.height - 40);
-        p.x = p.tx;
-        p.y = p.ty;
+        // 客人端的世界尺寸跟房主一致，位置会被快照覆盖，不要在这里重置
+        if (!fixed) { p.x = p.tx; p.y = p.ty; }
       }
       w.width = size.width;
       w.height = size.height;
     }
+  }
+
+  // 客人：采用房主的逻辑尺寸（收到 welcome / start 时调用）
+  function adoptHostWorld(vh) {
+    if (!vh || !isClient()) return;
+    vh = Math.round(vh);
+    if (vh < 200 || vh > 4000) return;          // 明显不合理的值直接忽略
+    mp.worldVH = vh;
+    if (mp.world) { mp.world.height = vh; mp.world.width = renderer.VW; }
+    fit();
   }
 
   /* --------------------------------------------------------------- 开局 */
@@ -87,15 +105,20 @@
     var pc = Core.clamp(playerCount || 1, 1, Net.MAX_PLAYERS);
     mp.playerCount = pc;
     mp.resultShown = false;
+    // 客人：先把房主的战场尺寸套上再建世界，否则队友位置会错位
+    if (isClient() && opts.h) adoptHostWorld(opts.h);
 
     model = new Core.GameModel({
       width: renderer.VW, height: renderer.VH,
       seed: opts.seed === undefined ? ((Math.random() * 0x7fffffff) | 0) : opts.seed,
       players: pc
     });
-    // 客人端还要准备一个「快照世界」，本地战机在里面预测
+    // 客人端还要准备一个「快照世界」，本地战机在里面预测。
+    // 尺寸必须用房主的逻辑高度，这样双方看到的战场才是同一个。
     if (isClient()) {
-      mp.world = Net.emptyWorld(renderer.VW, renderer.VH, mp.localSlot, pc);
+      var vh = mp.worldVH || renderer.VH;
+      renderer.setWorldHeight(vh);
+      mp.world = Net.emptyWorld(renderer.VW, vh, mp.localSlot, pc);
     }
     input.model = activeWorld();
     input.enabled = true;
@@ -125,7 +148,12 @@
     ui.el.hostIdText.textContent = id;
     var url = Net.buildJoinUrl(id);
     ui.el.hostUrl.textContent = url;
+    // 先让面板显示出来，量到真实可用宽度之后再画二维码 ——
+    // 否则画布会被 max-width 缩放，模块宽度不均，扫不出来
     ui.drawQr(url);
+    if (root.requestAnimationFrame) {
+      root.requestAnimationFrame(function () { ui.drawQr(url); });
+    }
     refreshHostLobby();
     if (statusText) ui.setStatus(ui.el.hostStatus, statusText, kind);
   }
@@ -158,7 +186,7 @@
         if (inGame) {
           // 中途加入：直接补进当前对局，并让客人切到游戏画面
           addPlayerLive(slot);
-          mp.host.sendTo(slot, { T: 'e', n: 'start', d: { players: mp.host.playerCount(), seed: model.seed } });
+          mp.host.sendTo(slot, { T: 'e', n: 'start', d: { players: mp.host.playerCount(), seed: model.seed, h: renderer.VH } });
         }
         refreshHostLobby();
         mp.host.broadcast({ T: 'e', n: 'join', d: { slots: mp.host.slots() } });
@@ -166,9 +194,14 @@
           'P' + (slot + 1) + ' 加入了！' + (inGame ? '（已并入当前对局）' : ''), 'ok');
         sfx.pickup('heal');
       },
-      // 附加进 welcome 消息的信息
+      // 附加进 welcome 消息的信息：种子 + 战场逻辑尺寸（客人必须照这个排版）
       onWelcome: function () {
-        return { seed: model ? model.seed : 0, inGame: (state === 'playing' && !!model) };
+        return {
+          seed: model ? model.seed : 0,
+          inGame: (state === 'playing' && !!model),
+          w: renderer.VW,
+          h: renderer.VH
+        };
       },
       onLeave: function (slot) {
         if (model) dropPlayerLive(slot);
@@ -259,7 +292,15 @@
         mp.localSlot = msg.slot;
         mp.playerCount = msg.players || (msg.slot + 1);
         mp.connected = true;
-        if (msg.inGame) return;          // 中途加入：等下一条 start 事件直接进对局
+        // 关键：用房主的战场尺寸排版，否则队友位置会整个错位
+        if (msg.h) adoptHostWorld(msg.h);
+        if (msg.inGame) {
+          // 中途加入：对局已经在跑，等 start 事件把自己送进去
+          ui.show('wait');
+          ui.el.waitId.textContent = id;
+          ui.setStatus(ui.el.waitStatus, '已加入房间，对局进行中，正在进入…', 'ok');
+          return;
+        }
         ui.show('wait');
         ui.el.waitId.textContent = id;
         ui.renderChips(ui.el.waitPlayers, { slots: msg.slots || [0, msg.slot], me: msg.slot });
@@ -268,7 +309,7 @@
       onSnapshot: function (snap) { applySnapshot(snap); },
       onEvent: function (name, data) {
         if (name === 'start') {
-          startGame(data.players, { seed: data.seed });
+          startGame(data.players, { seed: data.seed, h: data.h });
         } else if (name === 'pause') {
           onRemotePause(true);
         } else if (name === 'resume') {
@@ -788,17 +829,55 @@
     return m;
   }
 
-  /* --------------------------------------------------- 扫码（BarcodeDetector） */
-  var scanStream = null, scanTimer = null, scanDetector = null;
+  /* ----------------------------------------------------------- 扫码
+   * 两条解码路径：
+   *   1) 浏览器自带 BarcodeDetector（Chrome / Edge / 安卓 Chrome）—— 快，直接用
+   *   2) 本地化的 jsQR（vendor/jsQR.js）—— 纯 JS，任何浏览器都能跑
+   * 之前只写了第 1 条，所以 Firefox / Safari 上点「扫码加入」只会看到「不支持」。 */
+  var scanStream = null, scanTimer = null, scanDetector = null, scanCanvas = null, scanCtx = null;
 
   function scanSupported() {
-    return !!(root.BarcodeDetector && navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+    var hasCam = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+    var hasDecoder = !!(root.BarcodeDetector || typeof root.jsQR === 'function');
+    return hasCam && hasDecoder;
+  }
+
+  // 用 jsQR 解一帧（把视频帧缩到合适大小，跑起来更省）
+  function decodeWithJsQr(video) {
+    if (typeof root.jsQR !== 'function') return null;
+    var vw = video.videoWidth, vh = video.videoHeight;
+    if (!vw || !vh) return null;
+    var maxSide = 480;                      // 太大又慢又没必要
+    var scale = Math.min(1, maxSide / Math.max(vw, vh));
+    var w = Math.max(1, Math.round(vw * scale));
+    var h = Math.max(1, Math.round(vh * scale));
+    if (!scanCanvas) { scanCanvas = document.createElement('canvas'); scanCtx = scanCanvas.getContext('2d'); }
+    if (scanCanvas.width !== w || scanCanvas.height !== h) { scanCanvas.width = w; scanCanvas.height = h; }
+    scanCtx.drawImage(video, 0, 0, w, h);
+    var img;
+    try { img = scanCtx.getImageData(0, 0, w, h); } catch (e) { return null; }
+    var res = root.jsQR(img.data, w, h, { inversionAttempts: 'attemptBoth' });
+    return res && res.data ? res.data : null;
+  }
+
+  function handleScanned(raw) {
+    if (!raw) return false;
+    var id = Net.parseJoinHash(raw) || (Net.isValidSessionId(raw) ? Net.normalizeSessionId(raw) : null);
+    if (!id) return false;
+    stopScan();
+    ui.el.joinInput.value = id;
+    joinRoom(id);
+    return true;
   }
 
   function startScan() {
     if (!scanSupported()) {
+      var why = !navigator.mediaDevices
+        ? '这个浏览器不支持调用摄像头'
+        : '扫码组件没加载出来';
       ui.setStatus(ui.el.joinStatus,
-        '这个浏览器不支持网页内扫码，请用手机相机直接扫房主的二维码，或在上面手动输入 4 位房间号', 'error');
+        why + '。可以用手机自带的相机 / 微信扫一扫直接扫房主的二维码（会自动打开并加入），' +
+        '或者在上面手动输入房间号。', 'error');
       return;
     }
     ui.el.scanWrap.classList.remove('hidden');
@@ -807,20 +886,23 @@
       scanStream = stream;
       ui.el.scanVideo.srcObject = stream;
       ui.el.scanVideo.play();
-      scanDetector = new root.BarcodeDetector({ formats: ['qr_code'] });
-      ui.setStatus(ui.el.joinStatus, '把房主的二维码放进画面里', 'ok');
+      var useNative = !!root.BarcodeDetector;
+      if (useNative) scanDetector = new root.BarcodeDetector({ formats: ['qr_code'] });
+      ui.setStatus(ui.el.joinStatus,
+        '把房主的二维码放进画面里' + (useNative ? '' : '（使用内置解码器）'), 'ok');
+
       scanTimer = setInterval(function () {
-        scanDetector.detect(ui.el.scanVideo).then(function (codes) {
-          if (!codes || !codes.length) return;
-          var raw = codes[0].rawValue || '';
-          var id = Net.parseJoinHash(raw) || (/^\d{4}$/.test(raw) ? raw : null);
-          if (id) {
-            stopScan();
-            ui.el.joinInput.value = id;
-            joinRoom(id);
-          }
-        }).catch(function () { /* 单帧失败忽略，继续扫 */ });
-      }, 420);
+        if (useNative) {
+          scanDetector.detect(ui.el.scanVideo).then(function (codes) {
+            if (codes && codes.length) handleScanned(codes[0].rawValue || '');
+          }).catch(function () {
+            // 自带识别器出错就退回 jsQR
+            handleScanned(decodeWithJsQr(ui.el.scanVideo));
+          });
+        } else {
+          handleScanned(decodeWithJsQr(ui.el.scanVideo));
+        }
+      }, useNative ? 420 : 320);
     }).catch(function () {
       stopScan();
       ui.setStatus(ui.el.joinStatus, '打不开摄像头（需要授权，且必须用 https 或 localhost 访问）', 'error');
@@ -886,7 +968,7 @@
       var slots = mp.host ? mp.host.slots() : [0];
       var seed = (Math.random() * 0x7fffffff) | 0;
       if (mp.host) {
-        mp.host.broadcast({ T: 'e', n: 'start', d: { players: slots.length, seed: seed, slots: slots } });
+        mp.host.broadcast({ T: 'e', n: 'start', d: { players: slots.length, seed: seed, slots: slots, h: renderer.VH } });
       }
       startGame(slots.length, { seed: seed });
     });
@@ -909,6 +991,14 @@
     document.getElementById('btnStallQuit').addEventListener('click', function () {
       quitToMenu('已退出卡住的对局');
     });
+    // 赞助作者：菜单 / 暂停 / 结算三处都有入口，点开同一个弹层
+    Array.prototype.forEach.call(document.querySelectorAll('[data-sponsor]'), function (b) {
+      b.addEventListener('click', function () {
+        sfx.pickup('heal');
+        ui.showSponsor();
+      });
+    });
+    document.getElementById('btnSponsorBack').addEventListener('click', function () { ui.hideSponsor(); });
     document.getElementById('btnResume').addEventListener('click', resumeGame);
     document.getElementById('btnRestartPause').addEventListener('click', function () { startGame(1); });
     document.getElementById('btnQuit').addEventListener('click', function () {
@@ -1022,6 +1112,8 @@
     lines.push('qrcode=' + (typeof root.qrcode === 'function'));
     lines.push('webrtc=' + !!root.RTCPeerConnection);
     lines.push('barcodeDetector=' + !!root.BarcodeDetector);
+    lines.push('jsQR=' + (typeof root.jsQR === 'function'));
+    lines.push('scanSupported=' + scanSupported());
     flush();
 
     // 1) 二维码画出来没有
@@ -1030,7 +1122,14 @@
       lines.push('qrCanvas=' + (cv ? cv.width + 'x' + cv.height : 'none'));
       lines.push('sessionId=' + (mp.sessionId || 'none'));
       lines.push('joinUrl=' + (ui.el.hostUrl ? ui.el.hostUrl.textContent : ''));
-      // 2) 用浏览器自带的条码识别器反过来解一遍，验证二维码是有效的
+      // 2) 几何自检：静默区够不够、模块是否等宽、有没有被 CSS 缩放
+      var v = ui.verifyQr();
+      lines.push('qrGeom=' + (v.ok ? 'OK' : '★BAD') +
+        ' modules=' + v.modules + ' cell=' + v.cell + 'px quiet=' + v.quietPx + 'px' +
+        ' canvas=' + v.size + ' css=' + v.cssW +
+        ' quietOk=' + v.quietOk + ' uneven=' + v.uneven + ' ratioOk=' + v.ratioOk +
+        (v.why ? ' why=' + v.why : ''));
+      // 3) 用浏览器自带的条码识别器反过来解一遍，验证二维码是有效的
       if (cv && root.BarcodeDetector) {
         try {
           new root.BarcodeDetector({ formats: ['qr_code'] }).detect(cv).then(function (codes) {
@@ -1039,6 +1138,17 @@
             flush();
           }).catch(function (e) { lines.push('qrDecodeError=' + e); flush(); });
         } catch (e) { lines.push('qrDecodeThrow=' + e); }
+      } else if (typeof root.jsQR === 'function' && cv) {
+        // 没有 BarcodeDetector 就用本地化的 jsQR 解一遍，验证内置解码器真的能读出来
+        try {
+          var qctx = cv.getContext('2d');
+          var img = qctx.getImageData(0, 0, cv.width, cv.height);
+          var got = root.jsQR(img.data, cv.width, cv.height, { inversionAttempts: 'attemptBoth' });
+          lines.push('qrDecoded=' + (got && got.data ? got.data : 'FAILED') + ' (via jsQR)');
+          lines.push('qrParsedId=' + (got && got.data ? Net.parseJoinHash(got.data) : 'n/a'));
+        } catch (e) { lines.push('qrDecodeThrow=' + e); }
+      } else {
+        lines.push('qrDecoded=skipped(无解码器)');
       }
       flush();
     }, 2500);
@@ -1064,7 +1174,7 @@
     model = null;
     fit();
     model = makeIdleModel();
-    renderer.resize(stage.getBoundingClientRect().width, stage.getBoundingClientRect().height);
+    renderer.resize(stage.getBoundingClientRect().width, stage.getBoundingClientRect().height, hostVH());
     model.width = renderer.VW;
     model.height = renderer.VH;
 
@@ -1110,7 +1220,7 @@
       } else {
         setTimeout(function () { toMenu(); }, 160);
         var sm = /[?&]show=(\w+)/.exec(root.location.search);
-        if (sm && /^(help|pause|mp|host|join|wait|confirm)$/.test(sm[1])) {
+        if (sm && /^(help|pause|mp|host|join|wait|confirm|sponsor)$/.test(sm[1])) {
           setTimeout(function () {
             if (sm[1] === 'pause') {
               // ?show=pause&role=host|guest|solo —— 预览三种角色的暂停面板

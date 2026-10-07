@@ -53,25 +53,46 @@
       // 联机状态 / 提示
       netStat: $('netStat'), netPing: $('netPing'),
       stallBar: $('stallBar'), stallSec: $('stallSec'), btnStallQuit: $('btnStallQuit'),
-      toast: $('toast')
+      toast: $('toast'),
+      // 赞助
+      sponsor: $('screen-sponsor'), btnSponsorBack: $('btnSponsorBack'),
+      sponsorImg: document.querySelector('.sponsor-img')
     };
     this._scoreShown = 0;
     this._hpShown = 100;
     this._confirmCb = null;
     this._toastTimer = null;
+    this._current = 'menu';
+    this._sponsorFrom = 'menu';
   }
 
   UI.prototype.show = function (name) {
     var map = {
       menu: 'menu', help: 'help', pause: 'pause', over: 'over', loading: 'loading',
-      mp: 'mp', host: 'host', join: 'join', wait: 'wait', confirm: 'confirm'
+      mp: 'mp', host: 'host', join: 'join', wait: 'wait', confirm: 'confirm',
+      sponsor: 'sponsor'
     };
     for (var k in map) {
       if (this.el[map[k]]) this.el[map[k]].classList.toggle('hidden', k !== name);
     }
     if (!name) {
       for (var k2 in map) if (this.el[map[k2]]) this.el[map[k2]].classList.add('hidden');
+    } else {
+      this._current = name;
     }
+  };
+
+  UI.prototype.currentScreen = function () { return this._current || 'menu'; };
+
+  /* 赞助弹层：从哪来回哪去 */
+  UI.prototype.showSponsor = function () {
+    this._sponsorFrom = this.currentScreen();
+    this.show('sponsor');
+  };
+  UI.prototype.hideSponsor = function () {
+    var back = this._sponsorFrom || 'menu';
+    this._current = back;
+    this.show(back);
   };
 
   /* 通用确认弹窗：okText 是「确定」按钮的文案 */
@@ -106,30 +127,121 @@
     el.className = 'mp-status' + (kind ? ' ' + kind : '');
   };
 
-  /* 把「可扫码的加入链接」画成二维码 */
+  /* 把「可扫码的加入链接」画成二维码。
+   * 之前扫不出来有两个原因，都修掉了：
+   *   1) 静默区只留了 4「像素」，而 QR 规范要求静默区是 4 个「模块」（这里应该是 30+ 像素），
+   *      白边不够宽，很多扫码器直接放弃；
+   *   2) canvas 内部 240px 却被 CSS 显示成 208px，配上 image-rendering:pixelated，
+   *      模块宽度会在 7px / 6px 之间跳动，模块不等宽同样扫不出来。
+   * 现在：静默区按模块算、模块取整数像素、并且反复量真实渲染宽度直到画布是 1:1 显示。
+   * 最后一条很关键 —— 只要 CSS 缩放了画布，模块就不等宽，前面两条白做。 */
+  UI.prototype._paintQr = function (ctx, qr, n, quiet, cell, size) {
+    ctx.imageSmoothingEnabled = false;
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, size, size);
+    ctx.fillStyle = '#0b1220';
+    for (var r = 0; r < n; r++) {
+      for (var c = 0; c < n; c++) {
+        if (qr.isDark(r, c)) ctx.fillRect((c + quiet) * cell, (r + quiet) * cell, cell, cell);
+      }
+    }
+  };
+
   UI.prototype.drawQr = function (text) {
     var cv = this.el.qrCanvas;
     if (!cv || typeof root.qrcode !== 'function') return false;
     try {
-      var qr = root.qrcode(0, 'M');
+      var qr = root.qrcode(0, 'M');       // 0 = 按内容自动选版本，M 级纠错
       qr.addData(text);
       qr.make();
       var n = qr.getModuleCount();
+      var quiet = 4;                      // 静默区 = 4 个模块（规范要求）
+      var cells = n + quiet * 2;
       var ctx = cv.getContext('2d');
-      var pad = 4;
-      var cell = Math.floor((cv.width - pad * 2) / n);
-      var size = cell * n + pad * 2;
-      ctx.fillStyle = '#ffffff';
-      ctx.fillRect(0, 0, cv.width, cv.height);
-      var off = Math.floor((cv.width - size) / 2) + pad;
-      ctx.fillStyle = '#0b1220';
-      for (var r = 0; r < n; r++) {
-        for (var c = 0; c < n; c++) {
-          if (qr.isDark(r, c)) ctx.fillRect(off + c * cell, off + r * cell, cell, cell);
+
+      var cell = this._qrCell || 6;
+      var size = cells * cell;
+      for (var attempt = 0; attempt < 6; attempt++) {
+        size = cells * cell;
+        cv.width = size;
+        cv.height = size;
+        cv.style.width = size + 'px';
+        cv.style.height = size + 'px';
+        this._paintQr(ctx, qr, n, quiet, cell, size);
+
+        // 量真实「布局」宽度：如果被 CSS 压缩了，就按比例缩小模块再画一次。
+        // 注意必须用 offsetWidth 而不是 getBoundingClientRect() —— 后者会把
+        // 面板入场动画的 transform: scale() 算进去，量到的是缩放后的假尺寸。
+        var css = cv.offsetWidth || cv.clientWidth || 0;
+        if (css <= 0) break;                       // 面板还隐藏着，量不到，先这样
+        if (Math.abs(css - size) < 1) {            // 1:1 显示，成功
+          this._qrCell = cell;
+          break;
         }
+        var next = Math.floor(cell * (css / size)) - 1;
+        if (next < 3 || next >= cell) break;       // 已经缩到最小了，收工
+        cell = next;
       }
+
+      // 记录几何信息，供 ?selftest=1 自检（模块是否等宽、静默区够不够）
+      this._qrInfo = { text: text, modules: n, cell: cell, quiet: quiet, size: size };
       return true;
     } catch (e) { return false; }
+  };
+
+  /* 自检用：读回 canvas 像素验证二维码的几何是否合规 */
+  UI.prototype.verifyQr = function () {
+    var cv = this.el.qrCanvas;
+    var info = this._qrInfo;
+    if (!cv || !info) return { ok: false, why: '还没生成二维码' };
+    var ctx = cv.getContext('2d');
+    var d;
+    try { d = ctx.getImageData(0, 0, cv.width, cv.height).data; } catch (e) {
+      return { ok: false, why: '读不到画布像素：' + e.message };
+    }
+    var at = function (x, y) {
+      var i = (y * cv.width + x) * 4;
+      return d[i] < 128 && d[i + 1] < 128 && d[i + 2] < 128;
+    };
+    var guard = info.quiet * info.cell;
+    // 1) 静默区必须整圈纯白（规范要求 4 个模块）
+    var quietOk = true;
+    for (var y = 0; y < cv.height && quietOk; y += 2) {
+      for (var x = 0; x < cv.width; x += 2) {
+        var inQuiet = (x < guard || y < guard || x >= cv.width - guard || y >= cv.height - guard);
+        if (inQuiet && at(x, y)) { quietOk = false; break; }
+      }
+    }
+    // 2) 模块必须等宽：逐个模块中心采样，确认每格都是纯色（不是被缩放糊出来的）
+    var uneven = 0;
+    for (var r = 0; r < info.modules; r++) {
+      for (var c = 0; c < info.modules; c++) {
+        var cx = (c + info.quiet) * info.cell + Math.floor(info.cell / 2);
+        var cy = (r + info.quiet) * info.cell + Math.floor(info.cell / 2);
+        if (cx >= cv.width || cy >= cv.height) continue;
+        // 一个模块的全部像素应该同色
+        var v0 = at((c + info.quiet) * info.cell + 1, (r + info.quiet) * info.cell + 1);
+        if (at(cx, cy) !== v0) uneven++;
+      }
+    }
+    // 3) 显示尺寸必须和像素尺寸一致（CSS 缩放会让模块不等宽）
+    //    用 offsetWidth 而不是 getBoundingClientRect —— 后者会把面板入场动画的
+    //    transform: scale(0.97) 算进去，量到的是缩放后的假尺寸。
+    var cssW = cv.offsetWidth || cv.clientWidth || 0;
+    var parsedCss = 0, rectW = 0;
+    try {
+      var cs = root.getComputedStyle(cv);
+      parsedCss = parseFloat(cs.width) || 0;
+      rectW = cv.getBoundingClientRect().width;
+    } catch (e) { /* 忽略 */ }
+    var ratioOk = Math.abs(cssW - cv.width) < 1;
+    return {
+      ok: quietOk && uneven === 0 && ratioOk,
+      modules: info.modules, cell: info.cell, quietPx: guard, size: info.size,
+      quietOk: quietOk, uneven: uneven, ratioOk: ratioOk,
+      cssW: Math.round(cssW), parsedCss: Math.round(parsedCss), rectW: Math.round(rectW),
+      text: info.text
+    };
   };
 
   /* 房间里的玩家标签（P1~P4） */

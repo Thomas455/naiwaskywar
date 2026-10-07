@@ -20,10 +20,16 @@
     this._bind();
   }
 
+  /* 屏幕坐标 → 虚拟坐标。
+   * 联机 letterbox 时画布四周有黑边，所以要先减掉 offsetX/offsetY，
+   * 再用 renderer.scale（而不是 rect.width / VW）换算，否则客人的输入会整体偏移。 */
   Input.prototype._toVirtual = function (clientX, clientY) {
     var r = this.canvas.getBoundingClientRect();
-    var s = this.renderer.VW / (r.width || 1);
-    return { x: (clientX - r.left) * s, y: (clientY - r.top) * s };
+    var sc = this.renderer.scale || 1;
+    return {
+      x: (clientX - r.left - (this.renderer.offsetX || 0)) / sc,
+      y: (clientY - r.top - (this.renderer.offsetY || 0)) / sc
+    };
   };
 
   Input.prototype._bind = function () {

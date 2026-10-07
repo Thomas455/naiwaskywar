@@ -306,11 +306,13 @@ body::after {
 .session-id.small { font-size: 30px; letter-spacing: 8px; margin-bottom: 10px; }
 
 .qr-box {
-  display: inline-block; padding: 12px; margin: 4px auto 10px;
+  display: inline-block; padding: 10px; margin: 4px auto 10px;
   background: #fff; border-radius: 14px; line-height: 0;
   box-shadow: 0 8px 26px rgba(0, 0, 0, 0.45);
 }
-.qr-box canvas { display: block; width: 208px; height: 208px; image-rendering: pixelated; }
+/* 二维码按 canvas 实际像素 1:1 显示，不做任何 CSS 缩放
+   （缩放会让模块宽度在 7px/6px 之间跳，很多扫码器就读不出来了） */
+.qr-box canvas { display: block; width: auto; height: auto; max-width: 100%; image-rendering: pixelated; }
 
 .join-url { font-size: 10.5px; color: var(--ink-dim); word-break: break-all; margin: 0 0 10px; line-height: 1.5; }
 
@@ -353,6 +355,33 @@ body::after {
   background: rgba(110, 220, 255, 0.3);
   border-color: rgba(150, 235, 255, 0.75);
   box-shadow: 0 0 10px rgba(110, 220, 255, 0.45);
+}
+
+/* 多人按钮下面的小提示 */
+.mp-note {
+  margin: -4px 0 10px;
+  font-size: 11.5px; line-height: 1.5;
+  color: var(--ink-dim);
+  text-align: center;
+}
+.mp-note::before { content: '📶 '; }
+
+/* ----------------------------------------------------------- 赞助作者 */
+.btn-sponsor { position: relative; }
+.btn-sponsor .sp-heart { color: #ff8fa3; font-size: 14px; margin-right: 7px; }
+.btn-sponsor:hover .sp-heart { animation: heart-beat 0.7s ease infinite; }
+@keyframes heart-beat {
+  0%, 100% { transform: scale(1); }
+  35% { transform: scale(1.35); }
+  60% { transform: scale(1.08); }
+}
+
+.sponsor-panel { text-align: center; }
+.sponsor-img {
+  display: block; margin: 6px auto 10px;
+  width: min(260px, 72vw); height: auto;
+  border-radius: 14px; background: #fff; padding: 6px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
 }
 
 /* --------------------------------------------------------------- 观战条 */
