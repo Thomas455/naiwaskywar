@@ -225,6 +225,7 @@
     this.events = [];
     this.elapsedReal = 0;
     this.spectateSlot = -1;      // 观战目标（-1 = 自动挑一个活着的队友）
+    this._nextId = 1;            // 敌机 / 道具的稳定 id（联机平滑要用）
 
     // 统计
     this.stats = {
@@ -495,6 +496,8 @@
     var def = CONFIG.ENEMY[kind];
     var d = this.diff;
     var e = {
+      // 稳定 id：联机时客人靠它把同一只敌机的前后两帧对上，才能做位置平滑
+      id: this._nextId++,
       kind: kind,
       x: x, y: y,
       w: def.w, h: def.h, r: def.r,
@@ -524,6 +527,7 @@
     var cycle = Math.floor(this.time / CONFIG.BOSS_EVERY);
     var mpBoss = 1 + CONFIG.MP.BOSS_HP_PER_PLAYER * (this.playerCount - 1);
     var e = {
+      id: this._nextId++,
       kind: 'boss',
       x: this.width / 2, y: -140,
       w: def.w, h: def.h, r: def.r,
@@ -897,7 +901,7 @@
       if (e.boss || this.rng.next() < chance) {
         var kind = e.boss ? ['heal', 'power', 'shield'][i % 3] : weightedPick(this.rng, CONFIG.ITEM_WEIGHTS);
         if (e.boss && i === 2 && this.rng.next() < 0.35) kind = 'angel';
-        this.items.push({ kind: kind, x: e.x + (i - 1) * 40, y: e.y, t: 0 });
+        this.items.push({ id: this._nextId++, kind: kind, x: e.x + (i - 1) * 40, y: e.y, t: 0 });
       }
     }
   };

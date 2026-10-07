@@ -356,8 +356,6 @@
   function applySnapshot(snap) {
     if (!mp.world) return;
     var meBefore = mp.world.players[mp.localSlot];
-    var keepX = meBefore ? meBefore.x : null;
-    var keepY = meBefore ? meBefore.y : null;
     var keepTx = meBefore ? meBefore.tx : null;
     var keepTy = meBefore ? meBefore.ty : null;
 
@@ -368,10 +366,13 @@
     var me = mp.world.players[mp.localSlot];
     if (me) {
       if (keepTx !== null) { me.tx = keepTx; me.ty = keepTy; }
-      if (keepX !== null) {
-        // 预测位置往权威位置收敛 30%，既跟手又不会飘
-        me.x = keepX + (me.x - keepX) * 0.30;
-        me.y = keepY + (me.y - keepY) * 0.30;
+      // 本地战机是预测出来的，每收到一份快照就往权威位置拉 30%：
+      // 既保持跟手，又不会越飘越远。
+      // 目标是 me.sx（这份快照里的权威坐标），不是解码前的位置 ——
+      // 解码时 x 会从上一帧的预测位置接着走，拿它当目标等于原地不动、永远收敛不了。
+      if (typeof me.sx === 'number') {
+        me.x += (me.sx - me.x) * 0.30;
+        me.y += (me.sy - me.y) * 0.30;
       }
     }
     if (mp.world.over === undefined) mp.world.over = false;
@@ -1271,6 +1272,30 @@
         }
         if (/[?&]selftest=1/.test(root.location.search)) setTimeout(runSelfTest, 900);
       }
+        // ?hudcheck=1：把 HUD 底部那一行的排布报告出来（联机时延迟指示最容易挤爆这一行）
+        if (/[?&]hudcheck=1/.test(root.location.search)) {
+          setTimeout(function () {
+            if (isMultiplayer()) {
+              ui.updateNetStat({ multi: true, isHost: false, latency: 42, stalledSec: 0 });
+            } else {
+              // 单人时也强行显示一下，用来量最坏情况下的宽度
+              ui.el.netStat.classList.remove('hidden');
+              ui.el.netPing.textContent = '999 ms';
+            }
+            ui.setHudVisible(true);
+            var r = ui.hudCheck();
+            var pre = document.createElement('pre');
+            pre.id = 'hudcheck';
+            pre.style.cssText = 'position:fixed;left:0;top:0;z-index:99;background:#000c;color:#0f0;font-size:11px;padding:6px;white-space:pre-wrap';
+            var lines = ['stageW=' + r.stageW + ' rowH=' + r.rowH + ' overflow=' + r.overflow];
+            r.items.forEach(function (it) {
+              lines.push((it.inside ? 'OK  ' : '★BAD') + ' [' + it.who + '] w=' + it.w +
+                         ' right=' + it.right + ' stageRight=' + it.stageRight);
+            });
+            pre.textContent = lines.join('\n');
+            document.body.appendChild(pre);
+          }, 1200);
+        }
       root.requestAnimationFrame(frame);
       if (/[?&]metrics=1/.test(root.location.search)) setTimeout(dumpMetrics, 900);
     });

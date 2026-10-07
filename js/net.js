@@ -96,7 +96,8 @@
       e = m.enemies[i];
       if (e.delay > 0) continue;
       // w / h / r 都能由 kind 推出来，不必重复传
-      enemies.push([ENEMY_KINDS.indexOf(e.kind), ri(e.x), ri(e.y),
+      // 第 1 位是稳定 id：客人靠它把前后两份快照里的同一只敌机对上，才能平滑移动
+      enemies.push([e.id || 0, ENEMY_KINDS.indexOf(e.kind), ri(e.x), ri(e.y),
                     Math.round(e.hp), Math.round(e.maxHp), e.hurt > 0 ? 1 : 0]);
     }
     var bullets = [];
@@ -112,7 +113,7 @@
     var items = [];
     for (i = 0; i < m.items.length; i++) {
       it = m.items[i];
-      items.push([ITEM_KINDS.indexOf(it.kind), ri(it.x), ri(it.y)]);
+      items.push([it.id || 0, ITEM_KINDS.indexOf(it.kind), ri(it.x), ri(it.y)]);
     }
     var waves = [];
     for (i = 0; i < m.shockwaves.length; i++) {
@@ -149,30 +150,40 @@
     world.players = [];
     for (i = 0; i < snap.p.length; i++) {
       a = snap.p[i];
-      var prev = prevPlayers[i];
       var pp = prevPlayers[i];
       world.players.push({
-        slot: i, x: a[0], y: a[1], hp: a[2],
+        slot: i,
+        // 渲染位置从「上一帧画在哪」接着走，权威位置另存到 sx/sy 当目标。
+        // 直接 x = a[0] 的话 x 和 sx 恒等，平滑就成了空操作。
+        x: pp ? pp.x : a[0], y: pp ? pp.y : a[1],
+        sx: a[0], sy: a[1],
+        hp: a[2],
         maxHp: (root.NaiwaCore && root.NaiwaCore.CONFIG.PLAYER_MAX_HP) || 100,
         weapon: a[3], shieldCharges: a[4], invul: a[5], alive: !!a[6],
         score: a[7], kills: a[8], downT: a[9], left: !!a[10],
-        tx: prev ? prev.tx : a[0], ty: prev ? prev.ty : a[1],
-        // 权威位置另存一份，渲染用的 x/y 会在两帧之间朝它平滑靠拢
-        sx: a[0], sy: a[1],
-        x0: pp ? pp.x : a[0], y0: pp ? pp.y : a[1]
+        tx: pp ? pp.tx : a[0], ty: pp ? pp.ty : a[1]
       });
     }
+
+    // 敌机有稳定 id，按 id 找出上一帧的位置作为平滑起点
+    var prevEnemies = {};
+    var pe = world.enemies || [];
+    for (i = 0; i < pe.length; i++) if (pe[i].id) prevEnemies[pe[i].id] = pe[i];
 
     world.enemies = [];
     for (i = 0; i < snap.e.length; i++) {
       a = snap.e[i];
-      var kind = ENEMY_KINDS[a[0]] || 'chicken';
+      var eid = a[0] || 0;
+      var kind = ENEMY_KINDS[a[1]] || 'chicken';
       var def = enemyDef(kind);
+      var old = eid ? prevEnemies[eid] : null;
       world.enemies.push({
-        kind: kind, x: a[1], y: a[2], hp: a[3], maxHp: a[4], hurt: a[5] ? 0.05 : 0,
+        id: eid, kind: kind,
+        x: old ? old.x : a[2], y: old ? old.y : a[3],
+        sx: a[2], sy: a[3],
+        hp: a[4], maxHp: a[5], hurt: a[6] ? 0.05 : 0,
         boss: kind === 'boss', w: def.w, h: def.h, r: def.r,
-        delay: 0, pattern: 'straight', fire: 'none', fireCd: 99,
-        sx: a[1], sy: a[2]
+        delay: 0, pattern: 'straight', fire: 'none', fireCd: 99
       });
     }
 
@@ -191,10 +202,20 @@
       world.ebullets.push({ x: a[0], y: a[1], vx: a[2], vy: a[3], r: a[4], kind: 'orb' });
     }
 
+    var prevItems = {};
+    var pit = world.items || [];
+    for (i = 0; i < pit.length; i++) if (pit[i].id) prevItems[pit[i].id] = pit[i];
+
     world.items = [];
     for (i = 0; i < snap.i.length; i++) {
       a = snap.i[i];
-      world.items.push({ kind: ITEM_KINDS[a[0]] || 'heal', x: a[1], y: a[2], t: 0, sx: a[1], sy: a[2] });
+      var iid = a[0] || 0;
+      var oldIt = iid ? prevItems[iid] : null;
+      world.items.push({
+        id: iid, kind: ITEM_KINDS[a[1]] || 'heal',
+        x: oldIt ? oldIt.x : a[2], y: oldIt ? oldIt.y : a[3],
+        sx: a[2], sy: a[3], t: 0
+      });
     }
 
     world.shockwaves = [];
@@ -310,7 +331,10 @@
     if (!world || !(dt > 0)) return;
     opts = opts || {};
     var rate = opts.rate || 22;                       // 收敛速度：越大越跟手、越小越顺滑
+    // 队友的战机跟紧一点，手感更接近实时；敌机用默认值，够顺滑就行
+    var prate = opts.playerRate || 30;
     var k = 1 - Math.exp(-rate * dt);
+    var kp = 1 - Math.exp(-prate * dt);
     var i, e;
 
     var players = world.players || [];
@@ -318,8 +342,8 @@
       e = players[i];
       if (e.slot === world.localSlot) continue;       // 自己走预测
       if (e.sx === undefined) continue;
-      e.x += (e.sx - e.x) * k;
-      e.y += (e.sy - e.y) * k;
+      e.x += (e.sx - e.x) * kp;
+      e.y += (e.sy - e.y) * kp;
     }
 
     var enemies = world.enemies || [];

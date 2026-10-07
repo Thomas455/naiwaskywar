@@ -76,14 +76,14 @@
     for (var k in map) {
       if (this.el[map[k]]) this.el[map[k]].classList.toggle('hidden', k !== name);
     }
-    if (!name) {
-      for (var k2 in map) if (this.el[map[k2]]) this.el[map[k2]].classList.add('hidden');
-    } else {
-      this._current = name;
-    }
+    // name 为空表示「回到游戏中，没有面板」。
+    // 这里必须把 _current 也清成 null —— 否则它会停留在上一个面板上，
+    // 确认框点取消时就会把那个早就关掉的面板又弹出来
+    // （「点取消弹出已加入房间窗口」就是这么来的）。
+    this._current = name || null;
   };
 
-  UI.prototype.currentScreen = function () { return this._current || 'menu'; };
+  UI.prototype.currentScreen = function () { return this._current || null; };
 
   /* 赞助弹层：从哪来回哪去 */
   UI.prototype.showSponsor = function () {
@@ -91,9 +91,8 @@
     this.show('sponsor');
   };
   UI.prototype.hideSponsor = function () {
-    var back = this._sponsorFrom || 'menu';
-    this._current = back;
-    this.show(back);
+    this._current = this._sponsorFrom || 'menu';
+    this.show(this._current);
   };
 
   /* 通用确认弹窗：okText 是「确定」按钮的文案 */
@@ -107,18 +106,18 @@
   };
 
   /* 确定 → 执行回调（回调自己负责切到下一个界面）
-   * 取消 → 必须回到弹出前的那个界面，否则点了跟没点一样（以前就是漏了这一步） */
+   * 取消 → 回到弹出前的界面。from 为 null 表示「当时在游戏中、没有面板」，
+   * 这时必须回到游戏，而不是随便弹一个面板出来。 */
   UI.prototype.resolveConfirm = function (ok) {
     var cb = this._confirmCb;
+    var from = this._confirmFrom;
     this._confirmCb = null;
+    this._confirmFrom = undefined;
     if (ok) {
       if (cb) cb();
       return;
     }
-    var back = this._confirmFrom || 'menu';
-    this._confirmFrom = null;
-    this._current = back;
-    this.show(back);
+    this.show(from === undefined ? 'menu' : from);
   };
 
   /* 轻提示：屏幕底部飘一句，几秒后自动消失 */
@@ -198,6 +197,34 @@
       this._qrInfo = { text: text, modules: n, cell: cell, quiet: quiet, size: size };
       return true;
     } catch (e) { return false; }
+  };
+
+  /* 自检用：HUD 底部那一行有没有元素被挤出舞台（联机时多一个延迟指示，
+   * 窄屏上很容易把最后一颗按钮顶出屏幕 —— 客人右上角的「离开房间」就这么跑丢过）。 */
+  UI.prototype.hudCheck = function () {
+    var doc = root.document;
+    var stage = doc.getElementById('stage');
+    var sr = stage ? stage.getBoundingClientRect() : null;
+    var row = doc.querySelector('.hud-bottom');
+    var out = { stageW: sr ? Math.round(sr.width) : 0, rowH: 0, overflow: false, items: [] };
+    if (!row || !sr) return out;
+    out.rowH = Math.round(row.getBoundingClientRect().height);
+    var kids = row.children;
+    for (var i = 0; i < kids.length; i++) {
+      var k = kids[i];
+      if (k.classList && k.classList.contains('hidden')) continue;
+      var r = k.getBoundingClientRect();
+      if (r.width < 1) continue;
+      var inside = r.left >= sr.left - 1 && r.right <= sr.right + 1;
+      out.items.push({
+        who: k.id || String(k.className).split(' ')[0],
+        inside: inside,
+        w: Math.round(r.width),
+        right: Math.round(r.right), stageRight: Math.round(sr.right)
+      });
+      if (!inside) out.overflow = true;
+    }
+    return out;
   };
 
   /* 自检用：当前界面上每个按钮的位置，以及该位置最顶层的元素是不是它自己。
@@ -446,8 +473,8 @@
     var ping = state.latency || 0;
     var kind = ping > 400 ? 'bad' : (ping > 150 ? 'warn' : '');
     ns.className = 'stat net-stat' + (kind ? ' ' + kind : '');
-    // 房主自己没延迟可测，显示在线人数
-    this.el.netPing.textContent = state.isHost ? (state.players + '人') : (ping + 'ms');
+    // 单位在这里统一带上（HTML 里不要再写一遍，否则会变成「10msms」「2人ms」）
+    this.el.netPing.textContent = state.isHost ? (state.players + ' 人') : (ping + ' ms');
 
     var sb = this.el.stallBar;
     if (!sb) return;
